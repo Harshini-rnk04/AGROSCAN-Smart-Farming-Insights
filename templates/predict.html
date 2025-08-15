@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Crop Health Prediction</title>
+<style>
+    /* Background with online image */
+    body {
+        font-family: Arial, sans-serif;
+        background: url('https://images.unsplash.com/photo-1501004318641-b39e6451bec6?auto=format&fit=crop&w=1600&q=80') no-repeat center center/cover;
+        height: 100vh;
+        margin: 0;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    /* Main card */
+    .container {
+        background: rgba(255, 255, 255, 0.9);
+        padding: 30px;
+        border-radius: 20px;
+        text-align: center;
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3);
+        width: 420px;
+        backdrop-filter: blur(10px);
+    }
+
+    h2 {
+        color: #333;
+        margin-bottom: 20px;
+        font-size: 24px;
+        letter-spacing: 1px;
+    }
+
+    /* Hidden file input */
+    input[type="file"] {
+        display: none;
+    }
+
+    /* Stylish buttons */
+    .btn {
+        background: linear-gradient(45deg, #28a745, #3ddc84);
+        color: white;
+        padding: 12px 25px;
+        margin: 10px 5px;
+        border: none;
+        border-radius: 25px;
+        cursor: pointer;
+        font-size: 16px;
+        transition: transform 0.2s, box-shadow 0.2s;
+    }
+
+    .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }
+
+    /* Preview box */
+    .preview-box {
+        margin-top: 20px;
+        padding: 10px;
+        border: 2px dashed #bbb;
+        border-radius: 15px;
+        background: rgba(255,255,255,0.7);
+        min-height: 230px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+
+    #preview {
+        max-width: 100%;
+        max-height: 200px;
+        border-radius: 10px;
+        display: none;
+    }
+
+    .placeholder {
+        color: #777;
+        font-size: 14px;
+    }
+
+    /* Flash messages */
+    .flash-messages {
+        list-style: none;
+        padding: 0;
+        margin-bottom: 15px;
+        color: red;
+        font-weight: bold;
+    }
+</style>
+</head>
+<body>
+<div class="container">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+        <ul class="flash-messages">
+        {% for category, message in messages %}
+            <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
+    {% endif %}
+    {% endwith %}
+
+    <h2>🌱 Crop Health Prediction</h2>
+
+    <form action="/predict" method="POST" enctype="multipart/form-data">
+        <!-- Upload Button -->
+        <label class="btn" for="fileInput">Upload Image</label>
+        <input type="file" id="fileInput" name="crop_image" accept="image/*">
+
+        <!-- Preview Box -->
+        <div class="preview-box">
+            <img id="preview" src="#" alt="Preview Image">
+            <span id="placeholder-text" class="placeholder">No image selected</span>
+        </div>
+
+        <!-- Hidden Base64 Field -->
+        <input type="hidden" name="crop_image" id="hiddenInput">
+
+        <!-- Predict Button -->
+        <button class="btn" type="submit">Predict</button>
+    </form>
+</div>
+
+<script>
+    const fileInput = document.getElementById('fileInput');
+    const preview = document.getElementById('preview');
+    const hiddenInput = document.getElementById('hiddenInput');
+    const placeholderText = document.getElementById('placeholder-text');
+
+    // Handle file upload preview
+    fileInput.addEventListener('change', function(event){
+        const file = event.target.files[0];
+        if(file){
+            const reader = new FileReader();
+            reader.onload = function(e){
+                preview.src = e.target.result;
+                preview.style.display = 'block';
+                placeholderText.style.display = 'none';
+                hiddenInput.value = e.target.result; // send base64 to backend
+            }
+            reader.readAsDataURL(file);
+        }
+    });
+</script>
+</body>
+</html>

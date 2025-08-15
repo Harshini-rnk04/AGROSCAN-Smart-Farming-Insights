@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Welcome to AgroScan</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+  <style>
+    * {
+      box-sizing: border-box;
+      padding: 0;
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+    }
+
+    body {
+      background: linear-gradient(to right, #0f2027, #203a43, #2c5364);
+      color: white;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+
+    h1 {
+      font-size: 3rem;
+      margin-bottom: 20px;
+      text-align: center;
+      color: #f0f0f0;
+    }
+
+    .button-container {
+      display: flex;
+      gap: 40px;
+    }
+
+    .portal-btn {
+      background: #00c9a7;
+      border: none;
+      color: white;
+      padding: 18px 40px;
+      font-size: 1.2rem;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
+      transition: all 0.3s ease;
+      text-decoration: none;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .portal-btn:hover {
+      background: #02b18b;
+      transform: scale(1.05);
+    }
+
+    .portal-btn i {
+      font-size: 1.4rem;
+    }
+  </style>
+</head>
+<body>
+  <h1>Welcome to AgroScan</h1>
+  <div class="button-container">
+    <a href="/login?role=Farmer" class="portal-btn"><i class="fas fa-tractor"></i> Farmer Portal</a>
+    <a href="/login?role=Agronomist" class="portal-btn"><i class="fas fa-user-graduate"></i> Agronomist Portal</a>
+  </div>
+</body>
+</html>

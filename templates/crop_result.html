@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Prediction Result – AgroScan</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: url('https://images.unsplash.com/photo-1462331940025-496dfbfc7564?auto=format&fit=crop&w=1400&q=80') no-repeat center center/cover;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+            width: 400px;
+        }
+        h2 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .status-healthy {
+            color: green;
+            font-weight: bold;
+            font-size: 20px;
+        }
+        .status-unhealthy {
+            color: red;
+            font-weight: bold;
+            font-size: 20px;
+        }
+        .btn {
+            background-color: #4CAF50;
+            color: white;
+            padding: 12px 20px;
+            margin: 8px 0;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .btn:hover {
+            background-color: #45a049;
+        }
+        .preview-img {
+            max-width: 100%;
+            max-height: 250px;
+            border-radius: 10px;
+            border: 2px solid #000;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+            <ul class="flash-messages">
+            {% for category, message in messages %}
+                <li>{{ message }}</li>
+            {% endfor %}
+            </ul>
+        {% endif %}
+        {% endwith %}
+
+        <h2>Crop Health Prediction</h2>
+
+        {% if image_url %}
+            <img src="{{ image_url }}" alt="Uploaded Crop Image" class="preview-img">
+        {% endif %}
+
+        {% if health == 'Healthy' %}
+            <p class="status-healthy">Your crop looks healthy! 🌱</p>
+        {% else %}
+            <p class="status-unhealthy">Your crop seems unhealthy. Please consult an agronomist. 🚨</p>
+        {% endif %}
+
+        <a href="{{ url_for('predict_crop') }}" class="btn">Check Another</a>
+        <a href="{{ url_for(session['role'] + '_dashboard') }}" class="btn">Back to Dashboard</a>
+    </div>
+</body>
+</html>
