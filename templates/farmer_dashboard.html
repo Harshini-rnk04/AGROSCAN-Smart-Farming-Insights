@@ -1,22 +1,244 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Farmer Dashboard</title>
+  <meta charset="UTF-8">
+  <title>Farmer Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+       /* General Page Style */
+    body {
+      margin: 0;
+      font-family: 'Poppins', sans-serif;
+      height: 100vh;
+      display: flex;
+      background: linear-gradient(135deg, #1a472a, #2e8b57);
+      background-image: radial-gradient(rgba(255,255,255,0.2) 1px, transparent 1px),
+                        radial-gradient(rgba(255,255,255,0.15) 1px, transparent 1px);
+      background-size: 40px 40px, 80px 80px; /* Glittery dotted effect */
+      color: #000; /* Default text black */
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 260px;
+      background: linear-gradient(160deg, #006400, #32cd32, #228b22);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 25px 15px;
+      box-shadow: 4px 0 20px rgba(0, 0, 0, 0.4);
+      border-top-right-radius: 30px;
+      border-bottom-right-radius: 30px;
+    }
+
+    /* Profile Box */
+    .profile {
+      text-align: center;
+      margin-bottom: 40px;
+      background: transparent; /* Transparent instead of white */
+      padding: 20px;
+      border-radius: 16px;
+    }
+    .profile img {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      border: 4px solid #fff;
+      box-shadow: 0px 0px 20px rgba(0, 0, 0, 0.6);
+    }
+    .profile h3, .profile-info h2 {
+      margin: 15px 0 5px;
+      color: #000; /* Black text */
+    }
+    .profile p {
+      font-size: 14px;
+      color: #000; /* Black text */
+    }
+
+    /* Navigation Links */
+    .sidebar a {
+  text-decoration: none;
+  color: #fff; /* better contrast */
+  display: block;
+  width: 90%;        /* reduced from 100% */
+  padding: 10px 12px; /* smaller padding */
+  border-radius: 12px;
+  margin: 8px 0;
+  background: rgba(255, 255, 255, 0.2); /* semi-transparent */
+  text-align: center;
+  transition: all 0.3s ease;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+}
+
+.sidebar a:hover {
+  background: rgba(255, 255, 255, 0.35);
+  transform: scale(1.03);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+}
+
+
+    /* Main Content Area */
+    .main-content {
+      flex: 1;
+      padding: 40px;
+      display: flex;
+      justify-content: center;
+      align-items: flex-start;
+      background: transparent;
+    }
+
+    /* Transparent Glass Box */
+    .dashboard-box {
+      width: 90%;
+      min-height: 500px;
+      background: rgba(255, 255, 255, 0.9); /* more opaque for black text */
+      backdrop-filter: blur(12px);
+      border-radius: 25px;
+      padding: 30px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+      color: #000; /* black text */
+      border: 1px solid rgba(0, 0, 0, 0.2);
+      transition: all 0.3s ease;
+    }
+    .dashboard-box:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    }
+
+    /* Cards and Buttons inside dashboard */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+    .card {
+      background: rgba(255,255,255,0.95);
+      padding: 20px;
+      border-radius: 16px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+      transition: transform 0.2s ease;
+      color: #000; /* black text */
+    }
+    .card:hover {
+      transform: translateY(-5px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+    }
+    .card h3 {
+      margin-top: 0;
+      color: #006400; /* dark green headings */
+    }
+    .status-good {
+      color: green;
+      font-weight: bold;
+    }
+    .status-alert {
+      color: red;
+      font-weight: bold;
+    }
+
+    .btn-grid {
+      margin-top: 20px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      justify-content: center;
+    }
+    .btn {
+      background: linear-gradient(135deg, #32cd32, #006400);
+      color: #fff;
+      padding: 12px 24px;
+      border-radius: 30px;
+      text-decoration: none;
+      font-weight: 600;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .btn::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: rgba(255,255,255,0.2);
+      transition: left 0.3s ease;
+    }
+    .btn:hover::after {
+      left: 0;
+    }
+    .btn:hover {
+      transform: translateY(-2px);
+    }
+
+    /* Header */
+    header {
+      width: 100%;
+      text-align: center;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: 2rem;
+      color: #000; /* black header */
+    }
+    header p {
+      margin: 5px 0 0;
+      color: #000; /* black text */
+    }
+  </style>
 </head>
 <body>
-{% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-        <ul>
-        {% for category, message in messages %}
-            <li style="color:green;">{{ message }}</li>
-        {% endfor %}
-        </ul>
-    {% endif %}
-{% endwith %}
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="profile">
+      <img src="{{ profile_image_url }}" alt="Profile">
+      <h3>{{ username }}</h3>
+      <p>Farmer</p>
+    </div>
+    <a href="{{ url_for('soil_prediction') }}">Soil Prediction</a>
+    <a href="{{ url_for('predict_crop') }}">Crop Health</a>
+    <a href="{{ url_for('query_form') }}">Ask Query</a>
+    <a href="{{ url_for('weather_page') }}">Live Weather</a>
+    <a href="{{ url_for('logout') }}">Logout</a>
+  </div>
 
-<h2>Welcome {{ username }}!</h2>
-<p>Location: {{ location }}</p>
-<a href="{{ url_for('predict_crop') }}"><button>Predict Crop Health</button></a>
-<a href="{{ url_for('logout') }}"><button>Logout</button></a>
+  <!-- Main Content -->
+  <div class="main-content">
+    <div class="dashboard-box">
+      <header>
+        <h1>Farmer Dashboard</h1>
+        <p>Welcome, <strong>{{ username }}</strong> | Location: <strong>{{ location }}</strong></p>
+      </header>
+
+      <!-- Info Grid -->
+      <div class="grid">
+        <div class="card">
+          <h3>Weather Update</h3>
+          <p class="status-{{ weather_status_class }}">{{ weather_status_label }}</p>
+          <p>{{ weather_alert }}</p>
+        </div>
+        <div class="card">
+          <h3>Soil Recommendation</h3>
+          <p><strong>Crop:</strong> {{ soil_recommendation.crop }}</p>
+          <p><strong>Soil:</strong> {{ soil_recommendation.soil }}</p>
+          <p><strong>Fertilizer:</strong> {{ soil_recommendation.fertilizer }}</p>
+        </div>
+        <div class="card">
+          <h3>Crop Health</h3>
+          <p>{{ crop_health }}</p>
+        </div>
+        <div class="card">
+          <h3>Last Query Status</h3>
+          <p>{{ query_status }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
 </body>
 </html>
+
