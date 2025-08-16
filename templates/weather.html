@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Live Weather & Agri Advice</title>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      margin: 0;
+      display: flex;
+      min-height: 100vh;
+      background: linear-gradient(135deg, #1a472a, #2e8b57);
+      color: #fff;
+    }
+
+    .main-content {
+      flex: 1;
+      padding: 30px 40px;
+    }
+
+    .city-form {
+      margin-bottom: 25px;
+      text-align: center;
+    }
+    .city-form input[type="text"], .city-form input[type="submit"] {
+      border-radius: 6px;
+      border: none;
+      padding: 8px 15px;
+      font-size: 0.9rem;
+    }
+    .city-form input[type="submit"] {
+      background: #32cd32;
+      color: #fff;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 15px;
+      margin-bottom: 25px;
+    }
+
+    .card {
+      background: rgba(0,0,0,0.6);  /* dark background for visibility */
+      padding: 15px;
+      border-radius: 15px;
+      text-align: center;
+      box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+    }
+    .card h3 { margin: 0 0 5px; font-size: 1rem; color: #fff; }
+    .card p { margin: 3px 0; font-size: 0.9rem; color: #fff; }
+
+    .card img {
+      width: 40px;
+      height: 40px;
+      filter: brightness(1.2) drop-shadow(0 0 3px #000);
+      margin-top: 5px;
+    }
+
+    .advice {
+      margin-top: 20px;
+      padding: 15px;
+      background: rgba(0,0,0,0.7);  /* black semi-transparent */
+      border-radius: 15px;
+      color: #fff;
+    }
+    .advice h3 { margin-bottom: 10px; font-size: 1rem; color: #8880ff; }
+    .advice ul { padding-left: 18px; font-size: 0.9rem;color: #ffffff; /* White list text */}
+    .advice li { margin-bottom: 6px; }
+
+    canvas {
+      background: rgba(0,0,0,0.5);
+      border-radius: 12px;
+      margin-top: 15px;
+      max-width: 500px;
+      height: 220px !important;
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <div class="main-content">
+    <div class="main-content">
+<!-- Back to Dashboard button -->
+<a href="{{ url_for(session['role'] + '_dashboard') }}" 
+   style="position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+          padding: 10px 18px; background: rgba(0,0,0,0.5); color: #fff; 
+          border-radius: 8px; text-decoration: none; font-weight: 600;
+          box-shadow: 0 3px 6px rgba(0,0,0,0.3);">
+  ← Back to Dashboard
+</a>
+
+
+
+    <h1>Live Weather</h1>
+
+    <div class="city-form">
+      <form method="POST" action="{{ url_for('weather_page') }}">
+        <input type="text" name="city" placeholder="Enter city" required>
+        <input type="submit" value="Check Weather">
+      </form>
+    </div>
+
+    {% if weather %}
+    <div class="grid">
+      <div class="card">
+        <h3>Temperature</h3>
+        <p>{{ weather.temperature }} °C</p>
+        <img src="{{ url_for('static', filename='icons/temperature.png') }}" alt="Temp" onerror="this.src='https://img.icons8.com/ios-filled/50/ffffff/temperature.png'">
+      </div>
+      <div class="card">
+        <h3>Humidity</h3>
+        <p>{{ weather.humidity }} %</p>
+        <img src="{{ url_for('static', filename='icons/humidity.png') }}" alt="Humidity" onerror="this.src='https://img.icons8.com/ios-filled/50/ffffff/humidity.png'">
+      </div>
+      <div class="card">
+        <h3>Wind Speed</h3>
+        <p>{{ weather.wind }} km/h</p>
+        <img src="{{ url_for('static', filename='icons/wind.png') }}" alt="Wind" onerror="this.src='https://img.icons8.com/ios-filled/50/ffffff/wind.png'">
+      </div>
+      <div class="card">
+        <h3>Condition</h3>
+        <p>{{ weather.description }}</p>
+        <img src="{{ url_for('static', filename='icons/' + weather.icon) }}" alt="Condition" onerror="this.src='https://img.icons8.com/ios-filled/50/ffffff/cloud.png'">
+      </div>
+    </div>
+
+   <div class="advice">
+  <h3>Agricultural Advice:</h3>
+  <ul>
+    {% if weather.temperature >= 30 %}
+      <li>Warm temperature: Ensure proper irrigation to prevent crop stress.</li>
+    {% elif weather.temperature < 15 %}
+      <li>Low temperature: Protect sensitive crops with mulching or cover.</li>
+    {% else %}
+      <li>Temperature is normal for crops. Maintain regular care.</li>
+    {% endif %}
+
+    {% if weather.humidity < 40 %}
+      <li>Low humidity: Monitor irrigation and spray anti-transpirants if needed.</li>
+    {% elif weather.humidity > 80 %}
+      <li>High humidity: Watch for fungal diseases; apply preventive fungicides.</li>
+    {% else %}
+      <li>Humidity is optimal for crop growth.</li>
+    {% endif %}
+
+    {% if weather.description.lower() in ['rain', 'rainy', 'thunderstorm'] %}
+      <li>Rain expected: Delay fertilizer application; check drainage.</li>
+    {% else %}
+      <li>No rain expected. Plan irrigation as needed.</li>
+    {% endif %}
+  </ul>
+</div>
+
+
+    <canvas id="weatherChart"></canvas>
+    <script>
+      const ctx = document.getElementById('weatherChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: ['Temp (°C)', 'Humidity (%)', 'Wind (km/h)'],
+          datasets: [{
+            label: 'Weather Metrics',
+            data: [{{ weather.temperature }}, {{ weather.humidity }}, {{ weather.wind }}],
+            backgroundColor: ['#ff7f50', '#1e90ff', '#32cd32']
+          }]
+        },
+        options: {
+          responsive: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: true } },
+          scales: {
+            x: { ticks: { color: '#fff', font: { size: 11 } } },
+            y: { beginAtZero: true, ticks: { color: '#fff', font: { size: 11 } } }
+          }
+        }
+      });
+    </script>
+    {% endif %}
+  </div>
+</body>
+</html>
