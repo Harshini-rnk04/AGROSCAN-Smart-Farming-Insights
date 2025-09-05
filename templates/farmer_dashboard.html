@@ -4,241 +4,295 @@
   <meta charset="UTF-8">
   <title>Farmer Dashboard</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <!-- Google Fonts -->
+  
+  <!-- Google Fonts & Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+
   <style>
-       /* General Page Style */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
-      margin: 0;
       font-family: 'Poppins', sans-serif;
-      height: 100vh;
+      background-color: #f5f7fb;
+      color: #333;
       display: flex;
-      background: linear-gradient(135deg, #1a472a, #2e8b57);
-      background-image: radial-gradient(rgba(255,255,255,0.2) 1px, transparent 1px),
-                        radial-gradient(rgba(255,255,255,0.15) 1px, transparent 1px);
-      background-size: 40px 40px, 80px 80px; /* Glittery dotted effect */
-      color: #000; /* Default text black */
     }
 
     /* Sidebar */
     .sidebar {
-      width: 260px;
-      background: linear-gradient(160deg, #006400, #32cd32, #228b22);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      padding: 25px 15px;
-      box-shadow: 4px 0 20px rgba(0, 0, 0, 0.4);
-      border-top-right-radius: 30px;
-      border-bottom-right-radius: 30px;
+      width: 240px;
+      background: #1e1e2f;
+      color: white;
+      padding: 40px 20px;
+      height: 100vh;
+      position: fixed;
     }
 
-    /* Profile Box */
-    .profile {
-      text-align: center;
+    .sidebar h2 {
+      font-size: 22px;
       margin-bottom: 40px;
-      background: transparent; /* Transparent instead of white */
-      padding: 20px;
-      border-radius: 16px;
-    }
-    .profile img {
-      width: 100px;
-      height: 100px;
-      border-radius: 50%;
-      border: 4px solid #fff;
-      box-shadow: 0px 0px 20px rgba(0, 0, 0, 0.6);
-    }
-    .profile h3, .profile-info h2 {
-      margin: 15px 0 5px;
-      color: #000; /* Black text */
-    }
-    .profile p {
-      font-size: 14px;
-      color: #000; /* Black text */
+      color: #00d084;
     }
 
-    /* Navigation Links */
-    .sidebar a {
-  text-decoration: none;
-  color: #fff; /* better contrast */
-  display: block;
-  width: 90%;        /* reduced from 100% */
-  padding: 10px 12px; /* smaller padding */
-  border-radius: 12px;
-  margin: 8px 0;
-  background: rgba(255, 255, 255, 0.2); /* semi-transparent */
-  text-align: center;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-}
+    .sidebar ul { list-style: none; padding: 0; }
+    .sidebar ul li { margin: 20px 0; }
+    .sidebar ul li a {
+      color: white;
+      text-decoration: none;
+      font-weight: 500;
+      transition: color 0.3s ease;
+    }
+    .sidebar ul li a:hover { color: #00d084; }
 
-.sidebar a:hover {
-  background: rgba(255, 255, 255, 0.35);
-  transform: scale(1.03);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-}
-
-
-    /* Main Content Area */
+    /* Main content */
     .main-content {
-      flex: 1;
-      padding: 40px;
-      display: flex;
-      justify-content: center;
-      align-items: flex-start;
-      background: transparent;
-    }
-
-    /* Transparent Glass Box */
-    .dashboard-box {
-      width: 90%;
-      min-height: 500px;
-      background: rgba(255, 255, 255, 0.9); /* more opaque for black text */
-      backdrop-filter: blur(12px);
-      border-radius: 25px;
+      margin-left: 260px;
       padding: 30px;
-      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
-      color: #000; /* black text */
-      border: 1px solid rgba(0, 0, 0, 0.2);
-      transition: all 0.3s ease;
-    }
-    .dashboard-box:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+      width: 100%;
     }
 
-    /* Cards and Buttons inside dashboard */
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-      gap: 20px;
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
       margin-bottom: 30px;
     }
+
+    .header h1 { font-size: 26px; color: #1e1e2f; }
+
+    .profile-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      position: relative;
+    }
+
+    .profile-top {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 5px;
+    }
+
+    .profile-top p { font-size: 14px; color: #555; }
+    .profile-info h2 { font-size: 18px; margin-bottom: 4px; color: #1e1e2f; }
+    .profile-info p { font-size: 14px; color: #777; }
+
+    /* Notification Dropdown */
+    .notification-wrapper { position: relative; }
+    #notif-bell { font-size: 20px; cursor: pointer; }
+
+    .notification-dropdown {
+      display: none;
+      position: absolute;
+      top: 30px;
+      right: 0;
+      background: #fff;
+      color: #333;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      width: 260px;
+      padding: 10px;
+      z-index: 10;
+    }
+
+    .notification-dropdown h4 {
+      margin-bottom: 10px;
+      font-size: 14px;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 5px;
+    }
+
+    .notification-dropdown ul { list-style: none; padding: 0; margin: 0; }
+    .notification-dropdown ul li {
+      font-size: 13px;
+      padding: 6px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .notification-dropdown ul li:last-child { border-bottom: none; }
+
+    /* Cards */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+    }
+
     .card {
-      background: rgba(255,255,255,0.95);
+      background: white;
       padding: 20px;
       border-radius: 16px;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.2);
-      transition: transform 0.2s ease;
-      color: #000; /* black text */
-    }
-    .card:hover {
-      transform: translateY(-5px);
-      box-shadow: 0 8px 20px rgba(0,0,0,0.3);
-    }
-    .card h3 {
-      margin-top: 0;
-      color: #006400; /* dark green headings */
-    }
-    .status-good {
-      color: green;
-      font-weight: bold;
-    }
-    .status-alert {
-      color: red;
-      font-weight: bold;
-    }
-
-    .btn-grid {
-      margin-top: 20px;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 15px;
-      justify-content: center;
-    }
-    .btn {
-      background: linear-gradient(135deg, #32cd32, #006400);
-      color: #fff;
-      padding: 12px 24px;
-      border-radius: 30px;
-      text-decoration: none;
-      font-weight: 600;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.05);
       transition: all 0.3s ease;
-      position: relative;
-      overflow: hidden;
-    }
-    .btn::after {
-      content: "";
-      position: absolute;
-      top: 0;
-      left: -100%;
-      width: 100%;
-      height: 100%;
-      background: rgba(255,255,255,0.2);
-      transition: left 0.3s ease;
-    }
-    .btn:hover::after {
-      left: 0;
-    }
-    .btn:hover {
-      transform: translateY(-2px);
     }
 
-    /* Header */
-    header {
-      width: 100%;
-      text-align: center;
-      padding: 20px;
-      margin-bottom: 20px;
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
     }
-    header h1 {
-      margin: 0;
-      font-size: 2rem;
-      color: #000; /* black header */
-    }
-    header p {
-      margin: 5px 0 0;
-      color: #000; /* black text */
-    }
+
+    .card h3 { font-size: 16px; margin-bottom: 12px; color: #333; }
+    .card p { font-size: 14px; line-height: 1.6; }
+
+    .status-good { color: green; font-weight: bold; }
+    .status-alert { color: red; font-weight: bold; }
   </style>
 </head>
 <body>
+
   <!-- Sidebar -->
   <div class="sidebar">
-    <div class="profile">
-      <img src="{{ profile_image_url }}" alt="Profile">
-      <h3>{{ username }}</h3>
-      <p>Farmer</p>
-    </div>
-    <a href="{{ url_for('soil_prediction') }}">Soil Prediction</a>
-    <a href="{{ url_for('predict_crop') }}">Crop Health</a>
-    <a href="{{ url_for('query_form') }}">Ask Query</a>
-    <a href="{{ url_for('weather_page') }}">Live Weather</a>
-    <a href="{{ url_for('logout') }}">Logout</a>
+    <h2>AGROSCAN</h2>
+    <ul>
+      <li><a href="#">Dashboard</a></li>
+      <li><a href="{{ url_for('soil_prediction') }}">Soil Prediction</a></li>
+      <li><a href="{{ url_for('predict_crop') }}">Crop Health</a></li>
+      <li><a href="{{ url_for('query_form') }}">Ask Query</a></li>
+      <li><a href="{{ url_for('weather_page') }}">Live Weather</a></li>
+      <li><a href="{{ url_for('logout') }}">Logout</a></li>
+    </ul>
   </div>
 
   <!-- Main Content -->
   <div class="main-content">
-    <div class="dashboard-box">
-      <header>
-        <h1>Farmer Dashboard</h1>
-        <p>Welcome, <strong>{{ username }}</strong> | Location: <strong>{{ location }}</strong></p>
-      </header>
+    <div class="header">
+      <h1>Welcome, {{ username }}</h1>
 
-      <!-- Info Grid -->
-      <div class="grid">
-        <div class="card">
-          <h3>Weather Update</h3>
-          <p class="status-{{ weather_status_class }}">{{ weather_status_label }}</p>
-          <p>{{ weather_alert }}</p>
+      <div class="profile-info">
+        <div class="profile-top">
+          <p id="datetime"></p>
+          <div class="notification-wrapper">
+            <i class="fa-solid fa-bell" id="notif-bell"></i>
+            <div class="notification-dropdown" id="notif-box">
+              <h4>🔔 Notifications</h4>
+              <ul>
+                <li>{{ weather_alert }}</li>
+                <li>Query Status: {{ query_status }}</li>
+              </ul>
+            </div>
+          </div>
         </div>
-        <div class="card">
-          <h3>Soil Recommendation</h3>
-          <p><strong>Crop:</strong> {{ soil_recommendation.crop }}</p>
-          <p><strong>Soil:</strong> {{ soil_recommendation.soil }}</p>
-          <p><strong>Fertilizer:</strong> {{ soil_recommendation.fertilizer }}</p>
-        </div>
-        <div class="card">
-          <h3>Crop Health</h3>
-          <p>{{ crop_health }}</p>
-        </div>
-        <div class="card">
-          <h3>Last Query Status</h3>
-          <p>{{ query_status }}</p>
-        </div>
+        <h2>Location: {{ location }}</h2>
+        <p>Role: Farmer</p>
       </div>
     </div>
+
+   <!-- Data Cards -->
+<div class="grid">
+  <!-- Weather Update -->
+  <div class="card">
+    <h3>Weather Update</h3>
+    <p class="status-{{ weather_status_class }}">{{ weather_status_label }}</p>
+    <p>{{ weather_alert }}</p>
   </div>
+
+  <!-- Soil Recommendation -->
+  <div class="card">
+    <h3>Soil Recommendation</h3>
+    <p><strong>Crop:</strong> {{ soil_recommendation.crop }}</p>
+    <p><strong>Soil:</strong> {{ soil_recommendation.soil }}</p>
+    <p><strong>Fertilizer:</strong> {{ soil_recommendation.fertilizer }}</p>
+  </div>
+
+  <!-- Crop Health -->
+  <div class="card">
+    <h3>Crop Health</h3>
+    <p class="{{ 'status-good' if crop_health == 'Healthy' else 'status-alert' }}">{{ crop_health }}</p>
+  </div>
+
+  <!-- Recent Queries -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h3><b>Recent Queries</b></h3>
+    {% if query_list %}
+      <ul style="list-style:none; padding:0; margin:0;">
+        {% for q in query_list %}
+          <li style="margin-bottom:10px;">
+            <p style="font-size:13px; font-weight:600;">{{ q.question[:40] }}...</p>
+            <p style="font-size:12px; color:#555;">{{ q.answer }}</p>
+            <span style="font-size:12px; color: {{ 'green' if 'Answered' in q.status else 'orange' }};">
+              {{ q.status }}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No queries yet</p>
+    {% endif %}
+
+    <!-- Ask New Query button -->
+    <div style="margin-top:15px; text-align:right;">
+      <a href="{{ url_for('query_form') }}" 
+         style="background:#00b894; color:white; padding:6px 12px; border-radius:6px; text-decoration:none; font-size:13px;">
+        Ask New Query →
+      </a>
+    </div>
+  </div>
+
+  <!-- 📊 Recent Activity -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h3><b> Activity </b></h3>
+    {% if analytics %}
+      <ul style="list-style:none; padding:0; margin:0;">
+        {% for a in analytics %}
+          <li style="margin-bottom:8px; font-size:13px;">
+            <strong>Query:</strong> {{ a.question[:40] }}... 
+            <span style="color:#555;">({{ a.timestamp.strftime('%d %b %Y %I:%M %p') }})</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No activity yet</p>
+    {% endif %}
+  </div>
+
+  <!-- Market Prices -->
+  <div class="card">
+    <h3><b>Market Prices</b></h3>
+    <ul style="list-style:none; padding:0; margin:0;">
+      {% for crop, price in crop_prices.items() %}
+        <li style="margin-bottom:6px; font-size:13px;">
+          <strong>{{ crop }}</strong>: {{ price }}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <!-- Farming Tip -->
+  <div class="card">
+    <h3><B>Tip of the Day</B>></h3>
+    <p style="font-size:14px; color:#333;">{{ farming_tip }}</p>
+  </div>
+</div>
+
+
+  <!-- Scripts -->
+  <script>
+    // Update Date & Time
+    function updateDateTime() {
+      const now = new Date();
+      const options = { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' };
+      document.getElementById('datetime').innerText = 
+        now.toLocaleDateString('en-US', options) + " | " + now.toLocaleTimeString();
+    }
+    setInterval(updateDateTime, 1000);
+    updateDateTime();
+
+    // Toggle Notification Dropdown
+    document.getElementById("notif-bell").addEventListener("click", function() {
+      const box = document.getElementById("notif-box");
+      box.style.display = (box.style.display === "block") ? "none" : "block";
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener("click", function(e) {
+      const box = document.getElementById("notif-box");
+      const bell = document.getElementById("notif-bell");
+      if (!box.contains(e.target) && !bell.contains(e.target)) {
+        box.style.display = "none";
+      }
+    });
+  </script>
+
 </body>
 </html>
-
