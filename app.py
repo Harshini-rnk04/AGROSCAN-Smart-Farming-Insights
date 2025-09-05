@@ -1,6 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, render_template_string
 from flask_sqlalchemy import SQLAlchemy
 import os
+import pickle 
 import requests
 from tensorflow.keras.models import load_model
 import numpy as np
@@ -8,7 +9,7 @@ from PIL import Image
 from io import BytesIO
 from datetime import datetime, timedelta
 from jinja2 import TemplateNotFound
-
+from werkzeug.utils import secure_filename
 # ---------------- App Setup ----------------
 app = Flask(__name__)
 app.secret_key = 'secret_key'
@@ -35,15 +36,23 @@ class Query(db.Model):
     question = db.Column(db.Text, nullable=False)
     answer = db.Column(db.Text, default="Pending")
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
 # ---------------- Load Crop Health Model ----------------
 try:
-    crop_health_model = load_model('crop_health_model.h5')
-    print("✅ Model loaded successfully.")
+    MODEL_PATH = os.path.join(app.root_path, "trained_model.h5")
+    trained_model = load_model(MODEL_PATH)   # ✅ now same name as in route
+    print("✅ Trained model loaded successfully.")
 except Exception as e:
     print("❌ Model load failed:", e)
-    crop_health_model = None
+    trained_model = None
 
+    # ---------------- Load soil health Model ----------------
+try:
+    with open("E:/crop_soil_mapping.pkl", "rb") as f:
+        crop_soil_mapping = pickle.load(f)
+    print("✅ Soil Mapping loaded successfully.")
+except Exception as e:
+    crop_soil_mapping = {}
+    print(f"❌ Soil Mapping load failed: {e}")
 # ---------------- Helper: Live Weather Alert ----------------
 def get_weather_alert(city: str):
     API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"  # Replace with your real key
@@ -115,6 +124,25 @@ def login():
     return render_template('login.html')
 
 # ---------------- Farmer Dashboard ----------------
+import random
+
+# Dummy crop prices (replace with real API later)
+CROP_PRICES = {
+    "Wheat": "₹2200/quintal",
+    "Rice": "₹2800/quintal",
+    "Maize": "₹1900/quintal",
+    "Sugarcane": "₹300/quintal",
+    "Cotton": "₹6500/quintal"
+}
+
+FARMING_TIPS = [
+    "🌱 Rotate your crops every season to improve soil fertility.",
+    "💧 Water crops early morning or late evening to reduce evaporation.",
+    "🌿 Use organic compost to enrich the soil naturally.",
+    "☀️ Monitor weather reports to plan irrigation and fertilizer use.",
+    "🪲 Check crops regularly for pest infestations."
+]
+
 @app.route('/farmer')
 def farmer_dashboard():
     if session.get('role', '').lower() != 'farmer':
@@ -122,21 +150,45 @@ def farmer_dashboard():
         return redirect(url_for('logout'))
 
     crop_health = session.get("last_crop_health", "Not Analyzed Yet")
-    last_query = Query.query.filter_by(username=session['username']).order_by(Query.timestamp.desc()).first()
+
+    last_queries = Query.query.filter_by(username=session['username']) \
+                              .order_by(Query.timestamp.desc()) \
+                              .limit(3).all()
+    query_list = [{
+        "question": q.question,
+        "answer": q.answer,
+        "status": "✅ Answered" if q.answer and q.answer != "Pending" else "⌛ Pending"
+    } for q in last_queries] if last_queries else []
+
+    last_query = last_queries[0] if last_queries else None
     query_status = last_query.answer if last_query else "No queries yet"
+
     weather_alert, status_class, status_label = get_weather_alert(session.get('location', ''))
 
-    return render_template('farmer_dashboard.html',
-                           username=session.get('username', 'Farmer'),
-                           location=session.get('location', ''),
-                           profile_image_url=url_for('static', filename='person1.jpg'),
-                           weather_alert=weather_alert,
-                           weather_status_class=status_class,
-                           weather_status_label=status_label,
-                           soil_recommendation={"crop": "Wheat", "soil": "Loamy Soil", "fertilizer": "Urea (50kg/acre)"},
-                           crop_health=crop_health,
-                           query_status=query_status
-                           )
+    # ✅ Analytics: last 5 queries used as "uploads"
+    analytics = Query.query.filter_by(username=session['username']) \
+                           .order_by(Query.timestamp.desc()) \
+                           .limit(5).all()
+
+    # ✅ Pick random tip
+    farming_tip = random.choice(FARMING_TIPS)
+
+    return render_template(
+        'farmer_dashboard.html',
+        username=session.get('username', 'Farmer'),
+        location=session.get('location', ''),
+        profile_image_url=url_for('static', filename='person1.jpg'),
+        weather_alert=weather_alert,
+        weather_status_class=status_class,
+        weather_status_label=status_label,
+        soil_recommendation={"crop": "Wheat", "soil": "Loamy Soil", "fertilizer": "Urea (50kg/acre)"},
+        crop_health=crop_health,
+        query_status=query_status,
+        query_list=query_list,
+        analytics=analytics,          # 📊 Analytics
+        crop_prices=CROP_PRICES,      # 🌾 Prices
+        farming_tip=farming_tip       # 🚜 Tip
+    )
 
 # ---------------- Agronomist Dashboard ----------------
 @app.route('/agronomist')
@@ -154,33 +206,82 @@ def predict_crop():
     if 'username' not in session:
         flash('Please login first.', 'error')
         return redirect(url_for('login'))
+
     if request.method == 'POST':
-        if crop_health_model is None:
+        if trained_model is None:
             flash("Model not loaded.", 'error')
             return redirect(url_for('predict_crop'))
+
         file = request.files.get('crop_image')
-        if not file:
+        if not file or file.filename == '':
             flash("No file uploaded!", 'error')
             return redirect(url_for('predict_crop'))
-        img = Image.open(file.stream).convert("RGB")
-        img = img.resize((150, 150))
-        x = np.expand_dims(np.array(img, dtype=np.float32)/255.0, axis=0)
-        pred = crop_health_model.predict(x)
-        health_status = 'Healthy' if float(pred[0][0]) > 0.5 else 'Unhealthy'
-        session["last_crop_health"] = health_status
-        return render_template('crop_result.html', health=health_status)
+
+        try:
+            # Save uploaded file
+            filename = secure_filename(file.filename)
+            upload_folder = os.path.join('static', 'uploads')
+            os.makedirs(upload_folder, exist_ok=True)
+            file_path = os.path.join(upload_folder, filename)
+            file.save(file_path)
+
+            # Load & preprocess image
+            img = Image.open(file_path).convert("RGB")
+            img = img.resize((150, 150))   # ✅ must match model training input size
+            img_array = np.array(img, dtype=np.float32) / 255.0
+            x = np.expand_dims(img_array, axis=0)
+
+            # ✅ Use trained_model instead of crop_health_model
+            pred = trained_model.predict(x)[0][0]   # sigmoid output → probability
+            print("Prediction probability:", pred)
+
+            # Interpret result
+            health_status = "Healthy" if pred >= 0.5 else "Unhealthy"
+
+            # Save to session
+            session["last_crop_health"] = health_status
+
+            return render_template(
+                'crop_result.html',
+                health=health_status,
+                probability=round(float(pred), 2),
+                uploaded_image=url_for('static', filename=f'uploads/{filename}')
+            )
+
+        except Exception as e:
+            print("Prediction error:", e)
+            flash(f"Error processing image: {str(e)}", 'error')
+            return redirect(url_for('predict_crop'))
+
     return render_template('predict.html')
 
-# ---------------- Soil Prediction ----------------
-@app.route('/soil', methods=['GET', 'POST'])
+
+@app.route('/soil_prediction', methods=['GET', 'POST'])
 def soil_prediction():
+    if 'username' not in session:
+        flash('Please login first.', 'error')
+        return redirect(url_for('login'))
+
+    prediction = None
+    crop = None
+
     if request.method == 'POST':
-        flash("Soil prediction feature coming soon!", "info")
-        return redirect(url_for('farmer_dashboard'))
-    try:
-        return render_template('soil_prediction.html')
-    except TemplateNotFound:
-        return render_template_string("<h2>Soil Prediction Placeholder</h2><p><a href='/farmer'>Back</a></p>")
+        crop = request.form.get('crop')
+        if not crop:
+            flash("Please enter a crop name.", "error")
+            return redirect(url_for('soil_prediction'))
+
+        try:
+            crop = crop.strip().capitalize()   # normalize input
+            if crop in crop_soil_mapping:
+                prediction = crop_soil_mapping[crop]
+            else:
+                prediction = "❌ No soil data available for this crop"
+        except Exception as e:
+            flash(f"Prediction failed: {e}", "error")
+
+    return render_template("soil_prediction.html", crop=crop, prediction=prediction)
+
 
 # ---------------- Query Form ----------------
 @app.route('/query', methods=['GET', 'POST'])
@@ -188,18 +289,21 @@ def query_form():
     if 'username' not in session:
         flash('Please login first.', 'error')
         return redirect(url_for('login'))
+
     if request.method == 'POST':
         question = request.form.get('question', '').strip()
-        if question:
-            new_query = Query(username=session['username'], question=question)
-            db.session.add(new_query)
-            db.session.commit()
-            flash("Query submitted successfully!", "success")
+        if not question:
+            flash("Please enter a valid query ❌", "error")
+            return redirect(url_for('query_form'))
+
+        new_query = Query(username=session['username'], question=question)
+        db.session.add(new_query)
+        db.session.commit()
+
+        flash("✅ Your query has been submitted successfully!", "success")
         return redirect(url_for('farmer_dashboard'))
-    try:
-        return render_template('query_form.html')
-    except TemplateNotFound:
-        return render_template_string("<h2>Query Form Placeholder</h2><form method='post'><textarea name='question'></textarea><button type='submit'>Submit</button></form>")
+
+    return render_template('query_form.html')
 
 # ---------------- Live Weather ----------------
 @app.route('/weather', methods=['GET', 'POST'])
@@ -222,6 +326,29 @@ def weather_page():
         else:
             flash("City not found, please try again ❌")
     return render_template('weather.html', weather=weather_data)
+def get_weather_forecast(city: str):
+    API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"
+    forecast_data = []
+    try:
+        # Get lat/lon for the city
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
+        data = requests.get(url, timeout=8).json()
+        lat, lon = data["coord"]["lat"], data["coord"]["lon"]
+
+        # Fetch 7-day forecast
+        url_forecast = f"https://api.openweathermap.org/data/2.5/onecall?lat={lat}&lon={lon}&exclude=current,minutely,hourly,alerts&appid={API_KEY}&units=metric"
+        forecast = requests.get(url_forecast, timeout=8).json()
+
+        for day in forecast["daily"][:7]:
+            forecast_data.append({
+                "date": datetime.fromtimestamp(day["dt"]).strftime("%a"),
+                "temp": day["temp"]["day"],
+                "icon": day["weather"][0]["icon"]
+            })
+    except Exception as e:
+        print("❌ Forecast fetch failed:", e)
+    return forecast_data
+
 
 # ---------------- Logout ----------------
 @app.route('/logout')
@@ -259,3 +386,4 @@ if __name__ == "__main__":
     with app.app_context():
         db.create_all()
     app.run(debug=True)
+
