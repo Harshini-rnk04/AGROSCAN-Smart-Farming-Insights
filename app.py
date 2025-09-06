@@ -10,6 +10,8 @@ from io import BytesIO
 from datetime import datetime, timedelta
 from jinja2 import TemplateNotFound
 from werkzeug.utils import secure_filename
+from tensorflow.keras.preprocessing import image
+
 # ---------------- App Setup ----------------
 app = Flask(__name__)
 app.secret_key = 'secret_key'
@@ -37,13 +39,14 @@ class Query(db.Model):
     answer = db.Column(db.Text, default="Pending")
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 # ---------------- Load Crop Health Model ----------------
+
 try:
-    MODEL_PATH = os.path.join(app.root_path, "trained_model.h5")
-    trained_model = load_model(MODEL_PATH)   # ✅ now same name as in route
-    print("✅ Trained model loaded successfully.")
+    MODEL_PATH = os.path.join(app.root_path, "paddy_model.h5")  # your trained model file
+    paddy_model = load_model(MODEL_PATH)
+    print("✅ Crop Health model loaded successfully.")
 except Exception as e:
     print("❌ Model load failed:", e)
-    trained_model = None
+    plant_disease_model = None
 
     # ---------------- Load soil health Model ----------------
 try:
@@ -199,7 +202,22 @@ def agronomist_dashboard():
     return render_template('agronomist_dashboard.html',
                            username=session.get('username', 'Agronomist'),
                            location=session.get('location', ''))
+# ---------------- Helper Function: Predict Leaf Health ----------------
+def predict_leaf(model, img_path, threshold=0.50):
+    # Load image exactly like notebook
+    img = image.load_img(img_path, target_size=(150,150))
+    img_array = image.img_to_array(img)
+    img_array = np.expand_dims(img_array, axis=0)
+    img_array /= 255.0  # same as training
 
+    # Predict
+    pred = model.predict(img_array)[0][0]
+
+    # Apply threshold
+    if pred<threshold:
+        return "Healthy", pred
+    else:
+        return "Unhealthy", pred
 # ---------------- Crop Health Prediction ----------------
 @app.route('/predict', methods=['GET', 'POST'])
 def predict_crop():
@@ -207,11 +225,11 @@ def predict_crop():
         flash('Please login first.', 'error')
         return redirect(url_for('login'))
 
-    if request.method == 'POST':
-        if trained_model is None:
-            flash("Model not loaded.", 'error')
-            return redirect(url_for('predict_crop'))
+    if paddy_model is None:
+        flash("Model not loaded.", 'error')
+        return redirect(url_for('predict_crop'))
 
+    if request.method == 'POST':
         file = request.files.get('crop_image')
         if not file or file.filename == '':
             flash("No file uploaded!", 'error')
@@ -225,26 +243,19 @@ def predict_crop():
             file_path = os.path.join(upload_folder, filename)
             file.save(file_path)
 
-            # Load & preprocess image
-            img = Image.open(file_path).convert("RGB")
-            img = img.resize((150, 150))   # ✅ must match model training input size
-            img_array = np.array(img, dtype=np.float32) / 255.0
-            x = np.expand_dims(img_array, axis=0)
+            # Predict using helper
+            health_status, pred_prob = predict_leaf(paddy_model, file_path)
 
-            # ✅ Use trained_model instead of crop_health_model
-            pred = trained_model.predict(x)[0][0]   # sigmoid output → probability
-            print("Prediction probability:", pred)
-
-            # Interpret result
-            health_status = "Healthy" if pred >= 0.5 else "Unhealthy"
-
-            # Save to session
+            # Save result in session
             session["last_crop_health"] = health_status
+
+            # Debug: print predicted probability
+            print("DEBUG: pred_prob =", pred_prob)
 
             return render_template(
                 'crop_result.html',
                 health=health_status,
-                probability=round(float(pred), 2),
+                probability=round(pred_prob * 100, 2),
                 uploaded_image=url_for('static', filename=f'uploads/{filename}')
             )
 
@@ -254,6 +265,7 @@ def predict_crop():
             return redirect(url_for('predict_crop'))
 
     return render_template('predict.html')
+
 
 
 @app.route('/soil_prediction', methods=['GET', 'POST'])
@@ -386,4 +398,3 @@ if __name__ == "__main__":
     with app.app_context():
         db.create_all()
     app.run(debug=True)
-
