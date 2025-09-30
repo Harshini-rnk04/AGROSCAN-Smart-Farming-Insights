@@ -1,21 +1,210 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Agronomist Dashboard</title>
+  <meta charset="UTF-8">
+  <title>Agronomist Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Google Fonts & Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Poppins', sans-serif;
+      background-color: #f5f7fb;
+      color: #333;
+      display: flex;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: 240px;
+      background: #1e1e2f;
+      color: white;
+      padding: 40px 20px;
+      height: 100vh;
+      position: fixed;
+    }
+    .sidebar h2 {
+      font-size: 22px;
+      margin-bottom: 40px;
+      color: #00d084;
+      text-align: center; 
+    }
+    .sidebar ul { list-style: none; padding: 0; }
+    .sidebar ul li { margin: 20px 0; }
+    .sidebar ul li a {
+      display: block;
+      padding: 12px 18px;
+      border: 1px solid rgba(0, 208, 132, 0.4);
+      border-radius: 8px;
+      color: white;
+      text-decoration: none;
+      font-weight: 500;
+      font-size: 15px;
+      background: transparent;
+      transition: all 0.3s ease;
+    }
+    .sidebar ul li a:hover {
+      background: rgba(0, 208, 132, 0.1);
+      border-color: #00d084;
+      color: #00d084;
+    }
+
+    /* Main content */
+    .main-content {
+      margin-left: 260px;
+      padding: 30px;
+      width: 100%;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 30px;
+    }
+    .header h1 { font-size: 26px; color: #1e1e2f; }
+
+    .profile-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    .profile-top { display: flex; align-items: center; gap: 15px; margin-bottom: 5px; }
+    .profile-top p { font-size: 14px; color: #555; }
+    .profile-info h2 { font-size: 18px; margin-bottom: 4px; color: #1e1e2f; }
+    .profile-info p { font-size: 14px; color: #777; }
+
+    /* Cards */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; }
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 16px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+      transition: all 0.3s ease;
+    }
+    .card:hover { transform: translateY(-4px); box-shadow: 0 8px 20px rgba(0,0,0,0.08); }
+    .card h3 { font-size: 16px; margin-bottom: 12px; color: #333; }
+    .card p { font-size: 14px; line-height: 1.6; }
+    .status-good { color: green; font-weight: bold; }
+    .status-alert { color: red; font-weight: bold; }
+
+    /* Query table */
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    table th, table td { padding: 10px; border-bottom: 1px solid #ddd; text-align: left; }
+    table th { background: #f0f0f0; font-weight: 600; }
+    .reply-btn {
+      background: #00b894; color: white; border: none;
+      padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px;
+    }
+    .reply-btn:hover { background: #019875; }
+
+    /* Modal */
+    .modal { display: none; position: fixed; top:0; left:0; right:0; bottom:0;
+      background: rgba(0,0,0,0.4); justify-content: center; align-items: center; z-index: 100; }
+    .modal-content {
+      background: white; padding: 20px; border-radius: 12px; width: 400px;
+    }
+    .modal textarea { width: 100%; padding: 8px; margin-bottom: 12px; border-radius: 6px; border: 1px solid #ccc; }
+    .modal button { padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer; background: #00b894; color: white; }
+  </style>
 </head>
 <body>
-{% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-        <ul>
-        {% for category, message in messages %}
-            <li style="color:green;">{{ message }}</li>
-        {% endfor %}
-        </ul>
-    {% endif %}
-{% endwith %}
 
-<h2>Welcome {{ username }}!</h2>
-<p>Location: {{ location }}</p>
-<a href="{{ url_for('logout') }}"><button>Logout</button></a>
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <h2>AGROSCAN</h2>
+    <ul>
+      <li><a href="{{ url_for('agronomist_dashboard') }}">Dashboard</a></li>
+      <li><a href="{{ url_for('agronomist_dashboard') }}">Farmer Queries</a></li>
+      <li><a href="{{ url_for('analytics') }}">Analytics</a></li>
+      <li><a href="{{ url_for('logout') }}">Logout</a></li>
+    </ul>
+  </div>
+
+  <!-- Main Content -->
+  <div class="main-content">
+    <div class="header">
+      <h1>Welcome, {{ username }}</h1>
+      <div class="profile-info">
+        <div class="profile-top">
+          <p id="datetime"></p>
+        </div>
+        <h2>Location: {{ location }}</h2>
+        <p>Role: Agronomist</p>
+      </div>
+    </div>
+
+    <!-- Data Cards -->
+    <div class="grid">
+      <!-- Farmer Queries -->
+      <div class="card" style="grid-column:1/-1;">
+        <h3>Farmer Queries</h3>
+        {% if queries %}
+        <table>
+          <thead>
+            <tr>
+              <th>Farmer</th>
+              <th>Query</th>
+              <th>Status</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for q in queries %}
+            <tr>
+              <td>{{ q.farmer_name }}</td>
+              <td>{{ q.question }}</td>
+              <td>{{ q.status }}</td>
+              <td>
+                <button class="reply-btn" onclick="openReplyModal('{{ q.id }}','{{ q.farmer_name }}')">Reply</button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p>No queries yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Reply Modal -->
+  <div class="modal" id="replyModal">
+    <div class="modal-content">
+      <h3>Reply to <span id="farmerName"></span></h3>
+      <form method="POST" action="{{ url_for('reply_query') }}">
+        <input type="hidden" name="query_id" id="queryId">
+        <textarea name="reply_text" rows="4" placeholder="Type your reply here..." required></textarea>
+        <button type="submit">Send Reply</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script>
+    function updateDateTime() {
+      const now = new Date();
+      const options = { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' };
+      document.getElementById('datetime').innerText = 
+        now.toLocaleDateString('en-US', options) + " | " + now.toLocaleTimeString();
+    }
+    setInterval(updateDateTime, 1000);
+    updateDateTime();
+
+    function openReplyModal(queryId, farmerName) {
+      document.getElementById('queryId').value = queryId;
+      document.getElementById('farmerName').innerText = farmerName;
+      document.getElementById('replyModal').style.display = 'flex';
+    }
+    window.addEventListener('click', function(e) {
+      const modal = document.getElementById('replyModal');
+      if(e.target === modal) { modal.style.display = 'none'; }
+    });
+  </script>
 </body>
 </html>
