@@ -1,27 +1,35 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, render_template_string
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_sqlalchemy import SQLAlchemy
 import os
-import pickle 
+import pickle
 import requests
 from tensorflow.keras.models import load_model
 import numpy as np
 from PIL import Image
 from io import BytesIO
 from datetime import datetime, timedelta
-from jinja2 import TemplateNotFound
 from werkzeug.utils import secure_filename
 from tensorflow.keras.preprocessing import image
-
+from flask_apscheduler import APScheduler
+from flask_migrate import Migrate
+import joblib
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
 # ---------------- App Setup ----------------
+
 app = Flask(__name__)
-app.secret_key = 'secret_key'
+app.secret_key = 'replace_with_a_secure_secret'   # replace in production
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.permanent_session_lifetime = timedelta(days=7)
+
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 @app.before_request
 def make_session_permanent():
     session.permanent = True
+
 
 # ---------------- User Model ----------------
 class User(db.Model):
@@ -30,6 +38,7 @@ class User(db.Model):
     password = db.Column(db.String(150), nullable=False)
     location = db.Column(db.String(150), nullable=False)
     role = db.Column(db.String(50), nullable=False)  # 'farmer' or 'agronomist'
+    mobile = db.Column(db.String(20), nullable=False, unique=True)  # New field
 
 # ---------------- Query Model ----------------
 class Query(db.Model):
@@ -38,27 +47,128 @@ class Query(db.Model):
     question = db.Column(db.Text, nullable=False)
     answer = db.Column(db.Text, default="Pending")
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-# ---------------- Load Crop Health Model ----------------
 
-try:
-    MODEL_PATH = os.path.join(app.root_path, "paddy_model.h5")  # your trained model file
-    paddy_model = load_model(MODEL_PATH)
-    print("✅ Crop Health model loaded successfully.")
-except Exception as e:
-    print("❌ Model load failed:", e)
-    plant_disease_model = None
+# ---------------- SMS Log Model ----------------
+class SmsLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    to_number = db.Column(db.String(20), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    response = db.Column(db.Text)
+    success = db.Column(db.Boolean, default=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
-    # ---------------- Load soil health Model ----------------
-try:
-    with open("E:/crop_soil_mapping.pkl", "rb") as f:
-        crop_soil_mapping = pickle.load(f)
-    print("✅ Soil Mapping loaded successfully.")
-except Exception as e:
-    crop_soil_mapping = {}
-    print(f"❌ Soil Mapping load failed: {e}")
+class CropHealth(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), nullable=False)
+    image_path = db.Column(db.String(255), nullable=False)
+    prediction = db.Column(db.String(50), nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+# ---------------- Load Models ----------------
+# Load Random Forest model
+# Get project folder path
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load Random Forest model from project folder
+rf_model_path = os.path.join(BASE_DIR, "rf_paddy_model.pkl")
+rf_model = joblib.load(rf_model_path)
+
+# Load ResNet50 as feature extractor
+resnet_model = ResNet50(weights="imagenet", include_top=False, pooling="avg")
+
+# ---------------- Load soil health Model ----------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+dt_model_path = os.path.join(BASE_DIR, "E:/AGROSCAN-SMART FARMING/decision_tree_model.pkl")
+rf_model_path = os.path.join(BASE_DIR, "E:/AGROSCAN-SMART FARMING/random_forest_model.pkl")
+
+decision_tree_model = joblib.load(dt_model_path)
+random_forest_model = joblib.load(rf_model_path)
+
+print("✅ Decision Tree and Random Forest models loaded successfully.")
+
+# ---------------- Fast2SMS config ----------------
+import requests
+
+FAST2SMS_API_KEY = "0vx4tmFCsT7yIk6B9NqhpYidMb8zfZulJHQnGWV2EPLXjoRDUc5eVNdO1GuMpaAym2liBFIhJtnjc7k"
+
+
+# ---------------- Scheduler: daily weather alert with logging ----------------
+def daily_weather_alert():
+    with app.app_context():
+        users = User.query.all()
+        for u in users:
+            if not u.mobile:
+                continue
+
+            try:
+                weather_msg, _, _ = get_weather_alert(u.location)
+            except Exception as e:
+                weather_msg = f"Daily Weather: (error getting weather) - {e}"
+
+            full_msg = f"Hello {u.username}, {weather_msg}"
+
+            # Initialize error message
+            error_msg = ""
+
+            # Send SMS
+            try:
+                success = send_sms(u.mobile, full_msg)
+                if not success:
+                    error_msg = "Fast2SMS API returned failure"
+            except Exception as e:
+                print(f"❌ SMS sending failed for {u.mobile}: {e}")
+                success = False
+                error_msg = str(e)
+
+            # Log SMS in DB safely
+            sms_log = SmsLog(
+                to_number=u.mobile,
+                message=full_msg,
+                success=success,
+                response="Sent via Fast2SMS" if success else f"Failed: {error_msg}"
+            )
+            db.session.add(sms_log)
+
+        db.session.commit()
+        print("✅ Daily weather alerts processed and logged.")
+
+
+
+# ---------------- Updated send_sms function ----------------
+def send_sms(mobile: str, message: str):
+    """
+    Send SMS via Fast2SMS API.
+    """
+    try:
+        url = "https://www.fast2sms.com/dev/bulkV2"
+        payload = {
+            "sender_id": "TXTIND",
+            "message": message,
+            "route": "v3",
+            "numbers": mobile  # ✅ matches the variable name
+        }
+        headers = {
+            "authorization": FAST2SMS_API_KEY,
+            "Content-Type": "application/x-www-form-urlencoded"
+        }
+        response = requests.post(url, data=payload, headers=headers, timeout=10)
+        resp_json = response.json()
+        print(f"✅ SMS sent to {mobile}: {resp_json}")
+        return resp_json.get("return", False)  # True if success
+    except Exception as e:
+        print(f"❌ SMS send failed for {mobile}: {e}")
+        return False
+
+
 # ---------------- Helper: Live Weather Alert ----------------
+OPENWEATHER_API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"  # <-- replace
+
 def get_weather_alert(city: str):
-    API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"  # Replace with your real key
+    """
+    Return a tuple: (message, status_class, status_label)
+    """
+    API_KEY = OPENWEATHER_API_KEY
     if not city:
         return ("Weather location not set.", "alert", "Error")
     try:
@@ -76,8 +186,8 @@ def get_weather_alert(city: str):
             return (f"Stormy conditions in {city}. Take precautions.{temp_part}", "alert", "Storm Alert")
         else:
             return (f"Weather is currently {desc} in {city}.{temp_part}", "good", "Clear")
-    except Exception:
-        return ("Weather service error.", "alert", "Error")
+    except Exception as e:
+        return (f"Weather service error: {e}", "alert", "Error")
 
 # ---------------- Home Page ----------------
 @app.route('/')
@@ -92,21 +202,38 @@ def signup():
         password = request.form['password'].strip()
         location = request.form['location'].strip()
         role = request.form['role'].strip().lower()
+        mobile = request.form['mobile'].strip()  # mobile captured
+
         if role not in ['farmer', 'agronomist']:
             flash('Invalid role selected.', 'error')
             return redirect(url_for('signup'))
+
         if User.query.filter_by(username=username).first():
             flash('Username already exists.', 'error')
             return redirect(url_for('signup'))
-        new_user = User(username=username, password=password, location=location, role=role)
+
+        if User.query.filter_by(mobile=mobile).first():
+            flash('Mobile number already registered.', 'error')
+            return redirect(url_for('signup'))
+
+        new_user = User(username=username, password=password, location=location, role=role, mobile=mobile)
         db.session.add(new_user)
         db.session.commit()
+
+        # Save relevant info in session
         session['username'] = username
         session['location'] = location
         session['role'] = role
+        session['mobile'] = mobile
+
         flash('Signup successful!', 'success')
         return redirect(url_for(f"{role}_dashboard"))
+
     return render_template('signup.html')
+
+from sqlalchemy import or_
+
+# ---------------- Login ----------------
 
 # ---------------- Login ----------------
 @app.route('/login', methods=['GET', 'POST'])
@@ -118,6 +245,7 @@ def login():
         if user:
             session['username'] = user.username
             session['location'] = user.location
+            session['mobile'] =user.mobile
             session['role'] = user.role.strip().lower()
             flash('Login successful!', 'success')
             return redirect(url_for(f"{session['role']}_dashboard"))
@@ -126,16 +254,17 @@ def login():
             return redirect(url_for('login'))
     return render_template('login.html')
 
+
+
 # ---------------- Farmer Dashboard ----------------
 import random
 
-# Dummy crop prices (replace with real API later)
 CROP_PRICES = {
-    "Wheat": "₹2200/quintal",
-    "Rice": "₹2800/quintal",
-    "Maize": "₹1900/quintal",
-    "Sugarcane": "₹300/quintal",
-    "Cotton": "₹6500/quintal"
+    "Wheat": "₹2200 kg",
+    "Rice": "₹2800 kg",
+    "Maize": "₹1900 kg",
+    "Sugarcane": "₹300 kg",
+    "Cotton": "₹6500 kg"
 }
 
 FARMING_TIPS = [
@@ -168,12 +297,10 @@ def farmer_dashboard():
 
     weather_alert, status_class, status_label = get_weather_alert(session.get('location', ''))
 
-    # ✅ Analytics: last 5 queries used as "uploads"
     analytics = Query.query.filter_by(username=session['username']) \
                            .order_by(Query.timestamp.desc()) \
                            .limit(5).all()
 
-    # ✅ Pick random tip
     farming_tip = random.choice(FARMING_TIPS)
 
     return render_template(
@@ -188,44 +315,128 @@ def farmer_dashboard():
         crop_health=crop_health,
         query_status=query_status,
         query_list=query_list,
-        analytics=analytics,          # 📊 Analytics
-        crop_prices=CROP_PRICES,      # 🌾 Prices
-        farming_tip=farming_tip       # 🚜 Tip
+        analytics=analytics,
+        crop_prices=CROP_PRICES,
+        farming_tip=farming_tip
     )
 
 # ---------------- Agronomist Dashboard ----------------
-@app.route('/agronomist')
+@app.route('/agronomist_dashboard')
 def agronomist_dashboard():
     if session.get('role', '').lower() != 'agronomist':
         flash("Unauthorized access.", 'error')
         return redirect(url_for('logout'))
-    return render_template('agronomist_dashboard.html',
-                           username=session.get('username', 'Agronomist'),
-                           location=session.get('location', ''))
-# ---------------- Helper Function: Predict Leaf Health ----------------
-def predict_leaf(model, img_path, threshold=0.50):
-    # Load image exactly like notebook
-    img = image.load_img(img_path, target_size=(150,150))
-    img_array = image.img_to_array(img)
+
+    queries = Query.query.order_by(Query.timestamp.desc()).all()
+    query_list = [{
+        "id": q.id,
+        "farmer_name": q.username,
+        "question": q.question,
+        "status": "✅ Answered" if q.answer and q.answer != "Pending" else "⌛ Pending"
+    } for q in queries]
+
+    # ✅ Fetch farmer crop uploads
+    crop_records = CropHealth.query.order_by(CropHealth.timestamp.desc()).all()
+
+    return render_template(
+        'agronomist_dashboard.html',
+        username=session.get('username', 'Agronomist'),
+        location=session.get('location', ''),
+        queries=query_list,
+        crop_data=crop_records,
+        soil_data=[]   # placeholder for soil uploads if you add later
+    )
+
+
+@app.route('/reply_query', methods=['POST'])
+def reply_query():
+    if session.get('role', '').lower() != 'agronomist':
+        flash("❌ Unauthorized access.", 'error')
+        return redirect(url_for('logout'))
+
+    try:
+        query_id = int(request.form.get('query_id', 0))
+    except ValueError:
+        flash("❌ Invalid query ID.", "error")
+        return redirect(url_for('agronomist_dashboard'))
+
+    reply_text = request.form.get('reply_text', '').strip()
+    if not reply_text:
+        flash("❌ Reply text cannot be empty.", "error")
+        return redirect(url_for('agronomist_dashboard'))
+
+    query = Query.query.get(query_id)
+    if not query:
+        flash("❌ Query not found.", "error")
+        return redirect(url_for('agronomist_dashboard'))
+
+    try:
+        query.answer = reply_text
+        db.session.commit()
+        flash("✅ Reply sent successfully!", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"❌ Database error: {str(e)}", "error")
+
+    return redirect(url_for('agronomist_dashboard'))
+
+
+
+@app.route('/analytics')
+def analytics():
+    if session.get('role', '').lower() != 'agronomist':
+        flash("❌ Unauthorized access.", 'error')
+        return redirect(url_for('logout'))
+
+    try:
+        total_queries = Query.query.count()
+        answered_queries = Query.query.filter(
+            Query.answer.isnot(None), Query.answer != "", Query.answer != "Pending"
+        ).count()
+        pending_queries = total_queries - answered_queries
+
+        stats = {
+            "total_queries": total_queries,
+            "answered": answered_queries,
+            "pending": pending_queries
+        }
+    except Exception as e:
+        flash(f"❌ Analytics error: {str(e)}", "error")
+        stats = {"total_queries": 0, "answered": 0, "pending": 0}
+
+    return render_template('analytics.html', stats=stats)
+
+
+# ---------------- Helper Function ----------------
+def predict_leaf(img_path):
+    """
+    Predicts the health of a paddy crop image using ResNet50 + Random Forest.
+    """
+    # Preprocess image
+    img = load_img(img_path, target_size=(224, 224))
+    img_array = img_to_array(img)
     img_array = np.expand_dims(img_array, axis=0)
-    img_array /= 255.0  # same as training
+    img_array = preprocess_input(img_array)
 
-    # Predict
-    pred = model.predict(img_array)[0][0]
+    # Extract features
+    features = resnet_model.predict(img_array, verbose=0)
 
-    # Apply threshold
-    if pred<threshold:
-        return "Healthy", pred
+    # Predict with RF model
+    pred = rf_model.predict(features)[0]
+
+    if pred == 0:
+        return "Healthy"
     else:
-        return "Unhealthy", pred
-# ---------------- Crop Health Prediction ----------------
+        return "Unhealthy"
+
+# ---------------- Crop Health Prediction Route ----------------
 @app.route('/predict', methods=['GET', 'POST'])
 def predict_crop():
     if 'username' not in session:
         flash('Please login first.', 'error')
         return redirect(url_for('login'))
 
-    if paddy_model is None:
+    if rf_model is None:
         flash("Model not loaded.", 'error')
         return redirect(url_for('predict_crop'))
 
@@ -236,26 +447,28 @@ def predict_crop():
             return redirect(url_for('predict_crop'))
 
         try:
-            # Save uploaded file
             filename = secure_filename(file.filename)
             upload_folder = os.path.join('static', 'uploads')
             os.makedirs(upload_folder, exist_ok=True)
             file_path = os.path.join(upload_folder, filename)
             file.save(file_path)
 
-            # Predict using helper
-            health_status, pred_prob = predict_leaf(paddy_model, file_path)
+            # Predict crop health with the file path inside POST block
+            main_status = predict_leaf(file_path)
+            session["last_crop_health"] = main_status
 
-            # Save result in session
-            session["last_crop_health"] = health_status
-
-            # Debug: print predicted probability
-            print("DEBUG: pred_prob =", pred_prob)
+            # Save result in database
+            new_record = CropHealth(
+                username=session['username'],
+                image_path=f'uploads/{filename}',
+                prediction=main_status
+            )
+            db.session.add(new_record)
+            db.session.commit()
 
             return render_template(
                 'crop_result.html',
-                health=health_status,
-                probability=round(pred_prob * 100, 2),
+                health=main_status,
                 uploaded_image=url_for('static', filename=f'uploads/{filename}')
             )
 
@@ -267,32 +480,47 @@ def predict_crop():
     return render_template('predict.html')
 
 
-
+# ---------------- Soil Prediction ----------------
 @app.route('/soil_prediction', methods=['GET', 'POST'])
 def soil_prediction():
-    if 'username' not in session:
-        flash('Please login first.', 'error')
-        return redirect(url_for('login'))
-
     prediction = None
-    crop = None
+    soil = None
+    location = None
+    weather = None
 
     if request.method == 'POST':
-        crop = request.form.get('crop')
-        if not crop:
-            flash("Please enter a crop name.", "error")
-            return redirect(url_for('soil_prediction'))
+        soil = request.form.get("soil")
+        location = request.form.get("location")
 
-        try:
-            crop = crop.strip().capitalize()   # normalize input
-            if crop in crop_soil_mapping:
-                prediction = crop_soil_mapping[crop]
-            else:
-                prediction = "❌ No soil data available for this crop"
-        except Exception as e:
-            flash(f"Prediction failed: {e}", "error")
+        if not soil or not location:
+            flash("Please enter both soil type and location!", "error")
+            return redirect(url_for("soil_prediction"))
 
-    return render_template("soil_prediction.html", crop=crop, prediction=prediction)
+        # Fetch weather
+        weather, error = get_weather(location)
+        if error:
+            flash(f"Weather API error: {error}", "error")
+            return redirect(url_for("soil_prediction"))
+
+        # Dummy nutrient values (replace with logic later if needed)
+        nitrogen = 80
+        phosphorus = 40
+        potassium = 40
+        fertilizer = 100
+
+        # Prepare input for ML model
+        features = np.array([[weather["temp"], weather["rainfall"], fertilizer,
+                              nitrogen, phosphorus, potassium]])
+        
+        # Predict crop yield (or crop type if model is trained for classification)
+        prediction = random_forest_model.predict(features)[0]
+
+    return render_template("soil_prediction.html",
+                           soil=soil,
+                           location=location,
+                           weather=weather,
+                           prediction=prediction)
+
 
 
 # ---------------- Query Form ----------------
@@ -317,13 +545,13 @@ def query_form():
 
     return render_template('query_form.html')
 
-# ---------------- Live Weather ----------------
+# ---------------- Live Weather Page ----------------
 @app.route('/weather', methods=['GET', 'POST'])
 def weather_page():
     weather_data = None
     if request.method == 'POST':
         city = request.form.get('city')
-        API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"
+        API_KEY = OPENWEATHER_API_KEY
         url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
         response = requests.get(url)
         if response.status_code == 200:
@@ -338,20 +566,17 @@ def weather_page():
         else:
             flash("City not found, please try again ❌")
     return render_template('weather.html', weather=weather_data)
+
 def get_weather_forecast(city: str):
-    API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"
+    API_KEY = OPENWEATHER_API_KEY
     forecast_data = []
     try:
-        # Get lat/lon for the city
         url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
         data = requests.get(url, timeout=8).json()
         lat, lon = data["coord"]["lat"], data["coord"]["lon"]
-
-        # Fetch 7-day forecast
         url_forecast = f"https://api.openweathermap.org/data/2.5/onecall?lat={lat}&lon={lon}&exclude=current,minutely,hourly,alerts&appid={API_KEY}&units=metric"
         forecast = requests.get(url_forecast, timeout=8).json()
-
-        for day in forecast["daily"][:7]:
+        for day in forecast.get("daily", [])[:7]:
             forecast_data.append({
                 "date": datetime.fromtimestamp(day["dt"]).strftime("%a"),
                 "temp": day["temp"]["day"],
@@ -360,7 +585,6 @@ def get_weather_forecast(city: str):
     except Exception as e:
         print("❌ Forecast fetch failed:", e)
     return forecast_data
-
 
 # ---------------- Logout ----------------
 @app.route('/logout')
@@ -397,4 +621,5 @@ def api_dashboard_data():
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)  # ⚠️ disable reloader or job runs twice
+
