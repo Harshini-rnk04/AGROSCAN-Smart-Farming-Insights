@@ -15,6 +15,7 @@ from flask_migrate import Migrate
 import joblib
 from tensorflow.keras.preprocessing.image import load_img, img_to_array
 from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input
+
 # ---------------- App Setup ----------------
 
 app = Flask(__name__)
@@ -46,8 +47,8 @@ class Query(db.Model):
     username = db.Column(db.String(150), nullable=False)
     question = db.Column(db.Text, nullable=False)
     answer = db.Column(db.Text, default="Pending")
+    status = db.Column(db.String(50), default="Pending")
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
 # ---------------- SMS Log Model ----------------
 class SmsLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -57,13 +58,28 @@ class SmsLog(db.Model):
     success = db.Column(db.Boolean, default=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
+# ---------------- Soil Data Model ----------------
+class SoilData(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), nullable=False)
+    ph = db.Column(db.Float)
+    moisture = db.Column(db.Float)
+    soil_type = db.Column(db.String(100))
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+# ---------------- Crop Upload Model ----------------
+class CropUpload(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(150), nullable=False)
+    crop_name = db.Column(db.String(150))
+    prediction = db.Column(db.String(150))
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 class CropHealth(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(150), nullable=False)
     image_path = db.Column(db.String(255), nullable=False)
     prediction = db.Column(db.String(50), nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
 # ---------------- Load Models ----------------
 # Load Random Forest model
 # Get project folder path
@@ -77,15 +93,15 @@ rf_model = joblib.load(rf_model_path)
 resnet_model = ResNet50(weights="imagenet", include_top=False, pooling="avg")
 
 # ---------------- Load soil health Model ----------------
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-dt_model_path = os.path.join(BASE_DIR, "E:/AGROSCAN-SMART FARMING/decision_tree_model.pkl")
-rf_model_path = os.path.join(BASE_DIR, "E:/AGROSCAN-SMART FARMING/random_forest_model.pkl")
+# ---------------- Load Models ----------------
+crop_model = joblib.load("crop_model.pkl")
+soil_encoder = joblib.load("soil_encoder.pkl")
+crop_encoder = joblib.load("crop_encoder.pkl")
 
-decision_tree_model = joblib.load(dt_model_path)
-random_forest_model = joblib.load(rf_model_path)
+API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"  # for getting location weather if needed
 
-print("✅ Decision Tree and Random Forest models loaded successfully.")
+
 
 # ---------------- Fast2SMS config ----------------
 import requests
@@ -231,9 +247,6 @@ def signup():
 
     return render_template('signup.html')
 
-from sqlalchemy import or_
-
-# ---------------- Login ----------------
 
 # ---------------- Login ----------------
 @app.route('/login', methods=['GET', 'POST'])
@@ -253,6 +266,7 @@ def login():
             flash('Invalid credentials', 'error')
             return redirect(url_for('login'))
     return render_template('login.html')
+
 
 
 
@@ -311,7 +325,7 @@ def farmer_dashboard():
         weather_alert=weather_alert,
         weather_status_class=status_class,
         weather_status_label=status_label,
-        soil_recommendation={"crop": "Wheat", "soil": "Loamy Soil", "fertilizer": "Urea (50kg/acre)"},
+        soil_prediction={"crop": "Wheat", "soil": "Loamy Soil", "fertilizer": "Urea (50kg/acre)"},
         crop_health=crop_health,
         query_status=query_status,
         query_list=query_list,
@@ -320,7 +334,9 @@ def farmer_dashboard():
         farming_tip=farming_tip
     )
 
-# ---------------- Agronomist Dashboard ----------------
+
+
+# ----------------- AGRONOMIST DASHBOARD -----------------
 @app.route('/agronomist_dashboard')
 def agronomist_dashboard():
     if session.get('role', '').lower() != 'agronomist':
@@ -328,85 +344,117 @@ def agronomist_dashboard():
         return redirect(url_for('logout'))
 
     queries = Query.query.order_by(Query.timestamp.desc()).all()
-    query_list = [{
-        "id": q.id,
-        "farmer_name": q.username,
-        "question": q.question,
-        "status": "✅ Answered" if q.answer and q.answer != "Pending" else "⌛ Pending"
-    } for q in queries]
+    crop_data = CropHealth.query.order_by(CropHealth.timestamp.desc()).all()  # 👈 changed
+    soil_data = SoilData.query.order_by(SoilData.timestamp.desc()).all()
+    farmers = User.query.filter_by(role='farmer').all()
 
-    # ✅ Fetch farmer crop uploads
-    crop_records = CropHealth.query.order_by(CropHealth.timestamp.desc()).all()
+    return render_template('agronomist_dashboard.html',
+                           username=session.get('username'),
+                           location=session.get('location'),
+                           queries=queries,
+                           crop_data=crop_data,
+                           soil_data=soil_data,
+                           farmers=farmers)
 
-    return render_template(
-        'agronomist_dashboard.html',
-        username=session.get('username', 'Agronomist'),
-        location=session.get('location', ''),
-        queries=query_list,
-        crop_data=crop_records,
-        soil_data=[]   # placeholder for soil uploads if you add later
-    )
-
-
-@app.route('/reply_query', methods=['POST'])
-def reply_query():
+# ----------------- EDIT CROP -----------------
+@app.route('/edit_crop', methods=['POST'])
+def edit_crop():
     if session.get('role', '').lower() != 'agronomist':
-        flash("❌ Unauthorized access.", 'error')
+        flash("Unauthorized access.", 'error')
         return redirect(url_for('logout'))
 
-    try:
-        query_id = int(request.form.get('query_id', 0))
-    except ValueError:
-        flash("❌ Invalid query ID.", "error")
-        return redirect(url_for('agronomist_dashboard'))
-
-    reply_text = request.form.get('reply_text', '').strip()
-    if not reply_text:
-        flash("❌ Reply text cannot be empty.", "error")
-        return redirect(url_for('agronomist_dashboard'))
-
-    query = Query.query.get(query_id)
-    if not query:
-        flash("❌ Query not found.", "error")
-        return redirect(url_for('agronomist_dashboard'))
-
-    try:
-        query.answer = reply_text
+    crop_id = request.form.get('crop_id')
+    new_prediction = request.form.get('prediction')
+    crop = CropUpload.query.get(crop_id)
+    if crop:
+        crop.prediction = new_prediction
         db.session.commit()
-        flash("✅ Reply sent successfully!", "success")
+        flash("✅ Crop data updated successfully!", "success")
+    else:
+        flash("❌ Crop record not found.", "error")
+
+    return redirect(url_for('agronomist_dashboard'))
+
+@app.route('/update_crop_prediction', methods=['POST'])
+def update_crop_prediction():
+    if session.get('role', '').lower() != 'agronomist':
+        flash("❌ Unauthorized access.", "error")
+        return redirect(url_for('logout'))
+
+    crop_id = request.form.get('crop_id')
+    new_status = request.form.get('new_status')
+
+    if not crop_id or not new_status:
+        flash("⚠ Invalid update request.", "error")
+        return redirect(url_for('agronomist_dashboard'))
+
+    try:
+        crop = CropHealth.query.get(int(crop_id))
+        if crop:
+            crop.prediction = new_status
+            db.session.commit()
+            flash(f"✅ Crop status updated to '{new_status}'", "success")
+        else:
+            flash("❌ Crop record not found.", "error")
+
     except Exception as e:
         db.session.rollback()
-        flash(f"❌ Database error: {str(e)}", "error")
+        flash(f"❌ Error updating crop: {str(e)}", "error")
+
+    return redirect(url_for('agronomist_dashboard'))
+
+# ----------------- EDIT SOIL DATA -----------------
+@app.route('/edit_soil', methods=['POST'])
+def edit_soil():
+    if session.get('role', '').lower() != 'agronomist':
+        flash("Unauthorized access.", 'error')
+        return redirect(url_for('logout'))
+
+    soil_id = request.form.get('soil_id')
+    username = request.form.get('username')
+    soil_type = request.form.get('soil_type')
+    crop_type = request.form.get('crop_type')
+    location = request.form.get('location')
+
+    soil = SoilData.query.get(soil_id)
+    if soil:
+        soil.username = username
+        soil.soil_type = soil_type
+        soil.crop_type = crop_type
+        soil.location = location
+        db.session.commit()
+        flash("✅ Soil data updated successfully!", "success")
+    else:
+        flash("❌ Soil record not found.", "error")
 
     return redirect(url_for('agronomist_dashboard'))
 
 
-
-@app.route('/analytics')
-def analytics():
+# ----------------- REPLY TO QUERY -----------------
+@app.route('/reply_query', methods=['POST'])
+def reply_query():
     if session.get('role', '').lower() != 'agronomist':
-        flash("❌ Unauthorized access.", 'error')
+        flash("❌ Unauthorized access.", "error")
         return redirect(url_for('logout'))
 
-    try:
-        total_queries = Query.query.count()
-        answered_queries = Query.query.filter(
-            Query.answer.isnot(None), Query.answer != "", Query.answer != "Pending"
-        ).count()
-        pending_queries = total_queries - answered_queries
+    query_id = request.form.get("id")
+    reply_text = request.form.get("reply_text", "").strip()
 
-        stats = {
-            "total_queries": total_queries,
-            "answered": answered_queries,
-            "pending": pending_queries
-        }
-    except Exception as e:
-        flash(f"❌ Analytics error: {str(e)}", "error")
-        stats = {"total_queries": 0, "answered": 0, "pending": 0}
+    if not query_id or not reply_text:
+        flash("❌ Query ID or reply text missing.", "error")
+        return redirect(url_for("agronomist_dashboard"))
 
-    return render_template('analytics.html', stats=stats)
+    query = Query.query.get(query_id)
+    if not query:
+        flash("❌ Query not found.", "error")
+        return redirect(url_for("agronomist_dashboard"))
 
+    query.answer = reply_text
+    query.status = "Answered"
+    db.session.commit()
 
+    flash("✅ Reply sent successfully!", "success")
+    return redirect(url_for("agronomist_dashboard"))
 # ---------------- Helper Function ----------------
 def predict_leaf(img_path):
     """
@@ -480,13 +528,13 @@ def predict_crop():
     return render_template('predict.html')
 
 
-# ---------------- Soil Prediction ----------------
+# ---------------- Soil Prediction Route ----------------
 @app.route('/soil_prediction', methods=['GET', 'POST'])
 def soil_prediction():
-    prediction = None
     soil = None
     location = None
     weather = None
+    recommendation = None
 
     if request.method == 'POST':
         soil = request.form.get("soil")
@@ -497,29 +545,31 @@ def soil_prediction():
             return redirect(url_for("soil_prediction"))
 
         # Fetch weather
-        weather, error = get_weather(location)
+        weather, error = get_weather_for_soil(location)
         if error:
             flash(f"Weather API error: {error}", "error")
             return redirect(url_for("soil_prediction"))
 
-        # Dummy nutrient values (replace with logic later if needed)
+        # Dummy nutrient values
         nitrogen = 80
         phosphorus = 40
         potassium = 40
         fertilizer = 100
 
-        # Prepare input for ML model
+        # If model expects encoded soil
+        soil_encoded = soil_encoder.transform([soil])[0]
+
         features = np.array([[weather["temp"], weather["rainfall"], fertilizer,
-                              nitrogen, phosphorus, potassium]])
-        
-        # Predict crop yield (or crop type if model is trained for classification)
-        prediction = random_forest_model.predict(features)[0]
+                              nitrogen, phosphorus, potassium, soil_encoded]])
+
+        prediction = crop_model.predict(features)[0]
+        recommendation = f"Recommended Crop: {prediction}"
 
     return render_template("soil_prediction.html",
                            soil=soil,
                            location=location,
                            weather=weather,
-                           prediction=prediction)
+                           recommendation=recommendation)
 
 
 
@@ -616,10 +666,31 @@ def api_dashboard_data():
         "crop_health": crop_health,
         "query_status": query_status
     })
+@app.route('/fetch_crop_images')
+def fetch_crop_images():
+    """Return JSON of all crop health images"""
+    try:
+        images = CropHealth.query.order_by(CropHealth.timestamp.desc()).all()
+        data = [
+            {
+                "id": img.id,
+                "username": img.username,
+                "image_path": img.image_path,
+                "prediction": img.prediction,
+                "timestamp": img.timestamp.strftime("%Y-%m-%d %H:%M")
+            }
+            for img in images
+        ]
+        return jsonify({"success": True, "data": data})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 # ---------------- Run App ----------------
 if __name__ == "__main__":
     with app.app_context():
-        db.create_all()
-    app.run(debug=True, use_reloader=False)  # ⚠️ disable reloader or job runs twice
+        db.create_all()  # Recreate tables with new columns
+    app.run(debug=True, use_reloader=False)
+
+
+
 
