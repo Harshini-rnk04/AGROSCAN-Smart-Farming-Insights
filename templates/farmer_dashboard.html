@@ -1,603 +1,325 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
-from flask_sqlalchemy import SQLAlchemy
-import os
-import pickle
-import requests
-from tensorflow.keras.models import load_model
-import numpy as np
-from PIL import Image
-from io import BytesIO
-from datetime import datetime, timedelta
-from werkzeug.utils import secure_filename
-from tensorflow.keras.preprocessing import image
-from flask_apscheduler import APScheduler
-from flask_migrate import Migrate
-
-# ---------------- App Setup ----------------
-
-app = Flask(__name__)
-app.secret_key = 'replace_with_a_secure_secret'   # replace in production
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.permanent_session_lifetime = timedelta(days=7)
-
-db = SQLAlchemy(app)
-migrate = Migrate(app, db)
-
-@app.before_request
-def make_session_permanent():
-    session.permanent = True
-
-
-# ---------------- User Model ----------------
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), nullable=False, unique=True)
-    password = db.Column(db.String(150), nullable=False)
-    location = db.Column(db.String(150), nullable=False)
-    role = db.Column(db.String(50), nullable=False)  # 'farmer' or 'agronomist'
-    mobile = db.Column(db.String(20), nullable=False, unique=True)  # New field
-
-# ---------------- Query Model ----------------
-class Query(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(150), nullable=False)
-    question = db.Column(db.Text, nullable=False)
-    answer = db.Column(db.Text, default="Pending")
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-# ---------------- SMS Log Model ----------------
-class SmsLog(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    to_number = db.Column(db.String(20), nullable=False)
-    message = db.Column(db.Text, nullable=False)
-    response = db.Column(db.Text)
-    success = db.Column(db.Boolean, default=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-
-# ---------------- Load Crop Health Model ----------------
-paddy_model = None
-try:
-    MODEL_PATH = os.path.join(app.root_path, "paddy_model.h5")  # your trained model file
-    if os.path.exists(MODEL_PATH):
-        paddy_model = load_model(MODEL_PATH)
-        print("✅ Crop Health model loaded successfully.")
-    else:
-        print("⚠️ Crop model file not found:", MODEL_PATH)
-        paddy_model = None
-except Exception as e:
-    paddy_model = None
-    print("❌ Model load failed:", e)
-
-# ---------------- Load soil health Model ----------------
-crop_soil_mapping = {}
-try:
-    pkl_path = "E:/crop_soil_mapping.pkl"
-    if os.path.exists(pkl_path):
-        with open(pkl_path, "rb") as f:
-            crop_soil_mapping = pickle.load(f)
-        print("✅ Soil Mapping loaded successfully.")
-    else:
-        print("⚠️ Soil mapping file not found:", pkl_path)
-except Exception as e:
-    crop_soil_mapping = {}
-    print(f"❌ Soil Mapping load failed: {e}")
-
-# ---------------- Fast2SMS config ----------------
-import requests
-
-FAST2SMS_API_KEY = "0vx4tmFCsT7yIk6B9NqhpYidMb8zfZulJHQnGWV2EPLXjoRDUc5eVNdO1GuMpaAym2liBFIhJtnjc7k"
-
-
-# ---------------- Scheduler: daily weather alert with logging ----------------
-def daily_weather_alert():
-    with app.app_context():
-        users = User.query.all()
-        for u in users:
-            if not u.mobile:
-                continue
-
-            try:
-                weather_msg, _, _ = get_weather_alert(u.location)
-            except Exception as e:
-                weather_msg = f"Daily Weather: (error getting weather) - {e}"
-
-            full_msg = f"Hello {u.username}, {weather_msg}"
-
-            # Initialize error message
-            error_msg = ""
-
-            # Send SMS
-            try:
-                success = send_sms(u.mobile, full_msg)
-                if not success:
-                    error_msg = "Fast2SMS API returned failure"
-            except Exception as e:
-                print(f"❌ SMS sending failed for {u.mobile}: {e}")
-                success = False
-                error_msg = str(e)
-
-            # Log SMS in DB safely
-            sms_log = SmsLog(
-                to_number=u.mobile,
-                message=full_msg,
-                success=success,
-                response="Sent via Fast2SMS" if success else f"Failed: {error_msg}"
-            )
-            db.session.add(sms_log)
-
-        db.session.commit()
-        print("✅ Daily weather alerts processed and logged.")
-
-
-
-# ---------------- Updated send_sms function ----------------
-def send_sms(mobile: str, message: str):
-    """
-    Send SMS via Fast2SMS API.
-    """
-    try:
-        url = "https://www.fast2sms.com/dev/bulkV2"
-        payload = {
-            "sender_id": "TXTIND",
-            "message": message,
-            "route": "v3",
-            "numbers": mobile  # ✅ matches the variable name
-        }
-        headers = {
-            "authorization": FAST2SMS_API_KEY,
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
-        response = requests.post(url, data=payload, headers=headers, timeout=10)
-        resp_json = response.json()
-        print(f"✅ SMS sent to {mobile}: {resp_json}")
-        return resp_json.get("return", False)  # True if success
-    except Exception as e:
-        print(f"❌ SMS send failed for {mobile}: {e}")
-        return False
-
-
-# ---------------- Helper: Live Weather Alert ----------------
-OPENWEATHER_API_KEY = "546bcf1a2803be0bfa9dab15e79ca03b"  # <-- replace
-
-def get_weather_alert(city: str):
-    """
-    Return a tuple: (message, status_class, status_label)
-    """
-    API_KEY = OPENWEATHER_API_KEY
-    if not city:
-        return ("Weather location not set.", "alert", "Error")
-    try:
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
-        data = requests.get(url, timeout=8).json()
-        weather_list = data.get('weather', [])
-        if not weather_list:
-            return ("Weather data unavailable.", "alert", "Error")
-        desc = weather_list[0].get('description', 'clear').lower()
-        temp = data.get('main', {}).get('temp', None)
-        temp_part = f" | Temp: {temp}°C" if temp is not None else ""
-        if "rain" in desc:
-            return (f"Rain expected in {city} in next 24h.{temp_part}", "alert", "Rain Warning")
-        elif "storm" in desc or "thunder" in desc:
-            return (f"Stormy conditions in {city}. Take precautions.{temp_part}", "alert", "Storm Alert")
-        else:
-            return (f"Weather is currently {desc} in {city}.{temp_part}", "good", "Clear")
-    except Exception as e:
-        return (f"Weather service error: {e}", "alert", "Error")
-
-# ---------------- Home Page ----------------
-@app.route('/')
-def home():
-    return render_template('index.html')
-
-# ---------------- Signup ----------------
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    if request.method == 'POST':
-        username = request.form['username'].strip()
-        password = request.form['password'].strip()
-        location = request.form['location'].strip()
-        role = request.form['role'].strip().lower()
-        mobile = request.form['mobile'].strip()  # mobile captured
-
-        if role not in ['farmer', 'agronomist']:
-            flash('Invalid role selected.', 'error')
-            return redirect(url_for('signup'))
-
-        if User.query.filter_by(username=username).first():
-            flash('Username already exists.', 'error')
-            return redirect(url_for('signup'))
-
-        if User.query.filter_by(mobile=mobile).first():
-            flash('Mobile number already registered.', 'error')
-            return redirect(url_for('signup'))
-
-        new_user = User(username=username, password=password, location=location, role=role, mobile=mobile)
-        db.session.add(new_user)
-        db.session.commit()
-
-        # Save relevant info in session
-        session['username'] = username
-        session['location'] = location
-        session['role'] = role
-        session['mobile'] = mobile
-
-        flash('Signup successful!', 'success')
-        return redirect(url_for(f"{role}_dashboard"))
-
-    return render_template('signup.html')
-
-from sqlalchemy import or_
-
-# ---------------- Login ----------------
-
-# ---------------- Login ----------------
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        username = request.form['username'].strip()
-        password = request.form['password'].strip()
-        user = User.query.filter_by(username=username, password=password).first()
-        if user:
-            session['username'] = user.username
-            session['location'] = user.location
-            session['mobile'] =user.mobile
-            session['role'] = user.role.strip().lower()
-            flash('Login successful!', 'success')
-            return redirect(url_for(f"{session['role']}_dashboard"))
-        else:
-            flash('Invalid credentials', 'error')
-            return redirect(url_for('login'))
-    return render_template('login.html')
-
-
-
-# ---------------- Farmer Dashboard ----------------
-import random
-
-CROP_PRICES = {
-    "Wheat": "₹2200 kg",
-    "Rice": "₹2800 kg",
-    "Maize": "₹1900 kg",
-    "Sugarcane": "₹300 kg",
-    "Cotton": "₹6500 kg"
-}
-
-FARMING_TIPS = [
-    "🌱 Rotate your crops every season to improve soil fertility.",
-    "💧 Water crops early morning or late evening to reduce evaporation.",
-    "🌿 Use organic compost to enrich the soil naturally.",
-    "☀️ Monitor weather reports to plan irrigation and fertilizer use.",
-    "🪲 Check crops regularly for pest infestations."
-]
-
-@app.route('/farmer')
-def farmer_dashboard():
-    if session.get('role', '').lower() != 'farmer':
-        flash("Unauthorized access.", 'error')
-        return redirect(url_for('logout'))
-
-    crop_health = session.get("last_crop_health", "Not Analyzed Yet")
-
-    last_queries = Query.query.filter_by(username=session['username']) \
-                              .order_by(Query.timestamp.desc()) \
-                              .limit(3).all()
-    query_list = [{
-        "question": q.question,
-        "answer": q.answer,
-        "status": "✅ Answered" if q.answer and q.answer != "Pending" else "⌛ Pending"
-    } for q in last_queries] if last_queries else []
-
-    last_query = last_queries[0] if last_queries else None
-    query_status = last_query.answer if last_query else "No queries yet"
-
-    weather_alert, status_class, status_label = get_weather_alert(session.get('location', ''))
-
-    analytics = Query.query.filter_by(username=session['username']) \
-                           .order_by(Query.timestamp.desc()) \
-                           .limit(5).all()
-
-    farming_tip = random.choice(FARMING_TIPS)
-
-    return render_template(
-        'farmer_dashboard.html',
-        username=session.get('username', 'Farmer'),
-        location=session.get('location', ''),
-        profile_image_url=url_for('static', filename='person1.jpg'),
-        weather_alert=weather_alert,
-        weather_status_class=status_class,
-        weather_status_label=status_label,
-        soil_recommendation={"crop": "Wheat", "soil": "Loamy Soil", "fertilizer": "Urea (50kg/acre)"},
-        crop_health=crop_health,
-        query_status=query_status,
-        query_list=query_list,
-        analytics=analytics,
-        crop_prices=CROP_PRICES,
-        farming_tip=farming_tip
-    )
-
-# ---------------- Agronomist Dashboard ----------------
-
-@app.route('/agronomist_dashboard')
-def agronomist_dashboard():
-    if session.get('role', '').lower() != 'agronomist':
-        flash("Unauthorized access.", 'error')
-        return redirect(url_for('logout'))
-
-    queries = Query.query.order_by(Query.timestamp.desc()).all()
-    query_list = [{
-        "id": q.id,
-        "farmer_name": q.username,
-        "question": q.question,
-        "status": "✅ Answered" if q.answer and q.answer != "Pending" else "⌛ Pending"
-    } for q in queries]
-
-    return render_template(
-        'agronomist_dashboard.html',
-        username=session.get('username', 'Agronomist'),
-        location=session.get('location', ''),
-        queries=query_list
-    )
-@app.route('/reply_query', methods=['POST'])
-def reply_query():
-    if session.get('role', '').lower() != 'agronomist':
-        flash("Unauthorized access.", 'error')
-        return redirect(url_for('logout'))
-
-    query_id = request.form.get('query_id')
-    reply_text = request.form.get('reply_text')
-
-    if not query_id or not reply_text:
-        flash("Invalid reply submission ❌", "error")
-        return redirect(url_for('agronomist_dashboard'))
-
-    query = Query.query.get(query_id)
-    if not query:
-        flash("Query not found ❌", "error")
-        return redirect(url_for('agronomist_dashboard'))
-
-    query.answer = reply_text
-    db.session.commit()
-
-    flash("✅ Reply sent successfully!", "success")
-    return redirect(url_for('agronomist_dashboard'))
-
-
-@app.route('/analytics')
-def analytics():
-    if session.get('role', '').lower() != 'agronomist':
-        flash("Unauthorized access.", 'error')
-        return redirect(url_for('logout'))
-
-    total_queries = Query.query.count()
-    answered_queries = Query.query.filter(Query.answer != "Pending").count()
-    pending_queries = total_queries - answered_queries
-
-    # Simple insights
-    stats = {
-        "total_queries": total_queries,
-        "answered": answered_queries,
-        "pending": pending_queries
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Farmer Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  
+  <!-- Google Fonts & Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Poppins', sans-serif;
+      background-color: #f5f7fb;
+      color: #333;
+      display: flex;
     }
 
-    return render_template('analytics.html', stats=stats)
+/* Sidebar */
+.sidebar {
+  width: 240px;
+  background: #1e1e2f;
+  color: white;
+  padding: 40px 20px;
+  height: 100vh;
+  position: fixed;
+}
 
-# ---------------- Helper Function: Predict Leaf Health ----------------
-from PIL import Image
-from patchify import patchify
-import numpy as np
+.sidebar h2 {
+  font-size: 22px;
+  margin-bottom: 40px;
+  color: #00d084;
+  text-align: center; 
+}
 
-# ---------------- Helper Function: Predict Leaf Health ----------------
-def predict_leaf(model, img_path, patch_size=128):
-    """
-    Predicts the health of a paddy crop image using patch-based CNN model.
-    Returns health percentages for healthy and unhealthy patches.
-    """
-    # Load image
-    img = Image.open(img_path).convert("RGB")
-    img = np.array(img)
+.sidebar ul { 
+  list-style: none; 
+  padding: 0; 
+}
 
-    # Split image into patches
-    patches = patchify(img, (patch_size, patch_size, 3), step=patch_size)
+.sidebar ul li { 
+  margin: 20px 0; 
+}
 
-    healthy_count, unhealthy_count = 0, 0
-    total_patches = patches.shape[0] * patches.shape[1]
+/* Transparent Button Style */
+.sidebar ul li a {
+  display: block;
+  padding: 12px 18px;
+  border: 1px solid rgba(0, 208, 132, 0.4);  /* green outline */
+  border-radius: 8px;
+  color: white;
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 15px;
+  background: transparent;
+  transition: all 0.3s ease;
+}
 
-    for i in range(patches.shape[0]):
-        for j in range(patches.shape[1]):
-            patch = patches[i, j, 0]  # single patch
-            patch = Image.fromarray(patch).resize((224, 224))
-            patch = np.array(patch) / 255.0
-            patch = np.expand_dims(patch, axis=0)
-
-            # Predict
-            pred = model.predict(patch, verbose=0)
-            cls = np.argmax(pred)
-            if cls == 0:  # 0 = Healthy
-                healthy_count += 1
-            else:
-                unhealthy_count += 1
-
-    # Calculate percentages
-    healthy_pct = (healthy_count / total_patches) * 100
-    unhealthy_pct = (unhealthy_count / total_patches) * 100
-
-    # Decide main health status
-    if healthy_pct >= unhealthy_pct:
-        main_status = "Mostly Healthy"
-    else:
-        main_status = "Mostly Unhealthy"
-
-    return main_status, healthy_pct, unhealthy_pct
+.sidebar ul li a:hover {
+  background: rgba(0, 208, 132, 0.1); /* light green hover */
+  border-color: #00d084;
+  color: #00d084;
+}
 
 
-# ---------------- Crop Health Prediction ----------------
-@app.route('/predict', methods=['GET', 'POST'])
-def predict_crop():
-    if 'username' not in session:
-        flash('Please login first.', 'error')
-        return redirect(url_for('login'))
+    /* Main content */
+    .main-content {
+      margin-left: 260px;
+      padding: 30px;
+      width: 100%;
+    }
 
-    if paddy_model is None:
-        flash("Model not loaded.", 'error')
-        return redirect(url_for('predict_crop'))
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 30px;
+    }
 
-    if request.method == 'POST':
-        file = request.files.get('crop_image')
-        if not file or file.filename == '':
-            flash("No file uploaded!", 'error')
-            return redirect(url_for('predict_crop'))
+    .header h1 { font-size: 26px; color: #1e1e2f; }
 
-        try:
-            filename = secure_filename(file.filename)
-            upload_folder = os.path.join('static', 'uploads')
-            os.makedirs(upload_folder, exist_ok=True)
-            file_path = os.path.join(upload_folder, filename)
-            file.save(file_path)
+    .profile-info {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      position: relative;
+    }
 
-            # Use updated CNN patch-based function
-            main_status, healthy_pct, unhealthy_pct = predict_leaf(paddy_model, file_path)
-            session["last_crop_health"] = main_status
+    .profile-top {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      margin-bottom: 5px;
+    }
 
-            return render_template(
-                'crop_result.html',
-                health=main_status,
-                healthy_percentage=round(healthy_pct, 2),
-                unhealthy_percentage=round(unhealthy_pct, 2),
-                uploaded_image=url_for('static', filename=f'uploads/{filename}')
-            )
+    .profile-top p { font-size: 14px; color: #555; }
+    .profile-info h2 { font-size: 18px; margin-bottom: 4px; color: #1e1e2f; }
+    .profile-info p { font-size: 14px; color: #777; }
 
-        except Exception as e:
-            print("Prediction error:", e)
-            flash(f"Error processing image: {str(e)}", 'error')
-            return redirect(url_for('predict_crop'))
+    /* Notification Dropdown */
+    .notification-wrapper { position: relative; }
+    #notif-bell { font-size: 20px; cursor: pointer; }
 
-    return render_template('predict.html')
+    .notification-dropdown {
+      display: none;
+      position: absolute;
+      top: 30px;
+      right: 0;
+      background: #fff;
+      color: #333;
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      width: 260px;
+      padding: 10px;
+      z-index: 10;
+    }
 
-# ---------------- Soil Prediction ----------------
-@app.route('/soil_prediction', methods=['GET', 'POST'])
-def soil_prediction():
-    if 'username' not in session:
-        flash('Please login first.', 'error')
-        return redirect(url_for('login'))
+    .notification-dropdown h4 {
+      margin-bottom: 10px;
+      font-size: 14px;
+      border-bottom: 1px solid #ddd;
+      padding-bottom: 5px;
+    }
 
-    prediction = None
-    crop = None
+    .notification-dropdown ul { list-style: none; padding: 0; margin: 0; }
+    .notification-dropdown ul li {
+      font-size: 13px;
+      padding: 6px 0;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .notification-dropdown ul li:last-child { border-bottom: none; }
 
-    if request.method == 'POST':
-        crop = request.form.get('crop')
-        if not crop:
-            flash("Please enter a crop name.", "error")
-            return redirect(url_for('soil_prediction'))
+    /* Cards */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+    }
 
-        try:
-            crop = crop.strip().capitalize()
-            if crop in crop_soil_mapping:
-                prediction = crop_soil_mapping[crop]
-            else:
-                prediction = "❌ No soil data available for this crop"
-        except Exception as e:
-            flash(f"Prediction failed: {e}", "error")
+    .card {
+      background: white;
+      padding: 20px;
+      border-radius: 16px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+      transition: all 0.3s ease;
+    }
 
-    return render_template("soil_prediction.html", crop=crop, prediction=prediction)
+    .card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.08);
+    }
 
-# ---------------- Query Form ----------------
-@app.route('/query', methods=['GET', 'POST'])
-def query_form():
-    if 'username' not in session:
-        flash('Please login first.', 'error')
-        return redirect(url_for('login'))
+    .card h3 { font-size: 16px; margin-bottom: 12px; color: #333; }
+    .card p { font-size: 14px; line-height: 1.6; }
 
-    if request.method == 'POST':
-        question = request.form.get('question', '').strip()
-        if not question:
-            flash("Please enter a valid query ❌", "error")
-            return redirect(url_for('query_form'))
+    .status-good { color: green; font-weight: bold; }
+    .status-alert { color: red; font-weight: bold; }
+  </style>
+</head>
+<body>
 
-        new_query = Query(username=session['username'], question=question)
-        db.session.add(new_query)
-        db.session.commit()
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <h2>AGROSCAN</h2>
+    <ul>
+      <li><a href="#">Dashboard</a></li>
+      <li><a href="{{ url_for('soil_prediction') }}">Soil Prediction</a></li>
+      <li><a href="{{ url_for('predict_crop') }}">Crop Health</a></li>
+      <li><a href="{{ url_for('query_form') }}">Ask Query</a></li>
+     
+      <li><a href="{{ url_for('logout') }}">Logout</a></li>
+    </ul>
+  </div>
+      <div class="footer">
+      © 2025 AgroScan<br>
+      Farmer Portal
+    </div>
+  </div>
 
-        flash("✅ Your query has been submitted successfully!", "success")
-        return redirect(url_for('farmer_dashboard'))
+  <!-- Main Content -->
+  <div class="main-content">
+    <div class="header">
+      <h1>Welcome, {{ username }}</h1>
 
-    return render_template('query_form.html')
+      <div class="profile-info">
+        <div class="profile-top">
+          <p id="datetime"></p>
+          <div class="notification-wrapper">
+            <i class="fa-solid fa-bell" id="notif-bell"></i>
+            <div class="notification-dropdown" id="notif-box">
+              <h4>🔔 Notifications</h4>
+              <ul>
+                <li>{{ weather_alert }}</li>
+                <li>Query Status: {{ query_status }}</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+        <h2>Location: {{ location }}</h2>
+        <p>Role: Farmer</p>
+      </div>
+    </div>
 
-# ---------------- Live Weather Page ----------------
-@app.route('/weather', methods=['GET', 'POST'])
-def weather_page():
-    weather_data = None
-    if request.method == 'POST':
-        city = request.form.get('city')
-        API_KEY = OPENWEATHER_API_KEY
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
-        response = requests.get(url)
-        if response.status_code == 200:
-            data = response.json()
-            weather_data = {
-                "city": city,
-                "temperature": data["main"]["temp"],
-                "description": data["weather"][0]["description"].title(),
-                "humidity": data["main"]["humidity"],
-                "wind": data["wind"]["speed"]
-            }
-        else:
-            flash("City not found, please try again ❌")
-    return render_template('weather.html', weather=weather_data)
+   <!-- Data Cards -->
+<div class="grid">
+  <!-- Weather Update -->
+  <div class="card">
+    <h3>Weather Update</h3>
+    <p class="status-{{ weather_status_class }}">{{ weather_status_label }}</p>
+    <p>{{ weather_alert }}</p>
+  </div>
 
-def get_weather_forecast(city: str):
-    API_KEY = OPENWEATHER_API_KEY
-    forecast_data = []
-    try:
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={API_KEY}&units=metric"
-        data = requests.get(url, timeout=8).json()
-        lat, lon = data["coord"]["lat"], data["coord"]["lon"]
-        url_forecast = f"https://api.openweathermap.org/data/2.5/onecall?lat={lat}&lon={lon}&exclude=current,minutely,hourly,alerts&appid={API_KEY}&units=metric"
-        forecast = requests.get(url_forecast, timeout=8).json()
-        for day in forecast.get("daily", [])[:7]:
-            forecast_data.append({
-                "date": datetime.fromtimestamp(day["dt"]).strftime("%a"),
-                "temp": day["temp"]["day"],
-                "icon": day["weather"][0]["icon"]
-            })
-    except Exception as e:
-        print("❌ Forecast fetch failed:", e)
-    return forecast_data
+  <!-- Soil Recommendation -->
+  <div class="card">
+    <h3>Soil Recommendation</h3>
+      <p><strong>Crop:</strong> {{ soil_prediction.crop }}</p>
+      <p><strong>Soil:</strong> {{ soil_prediction.soil }}</p>
+      <p><strong>Fertilizer:</strong> {{ soil_prediction.fertilizer }}</p>
 
-# ---------------- Logout ----------------
-@app.route('/logout')
-def logout():
-    session.clear()
-    flash('Logged out.', 'info')
-    return redirect(url_for('login'))
+  </div>
 
-# ---------------- API for Live Dashboard Data ----------------
-@app.route('/api/dashboard-data')
-def api_dashboard_data():
-    username = session.get('username', 'Farmer')
-    location = session.get('location', 'Unknown')
-    role = session.get('role', '').lower()
-    if role != 'farmer':
-        return jsonify({"error": "Unauthorized"}), 403
-    weather_alert, weather_status_class, weather_status_label = get_weather_alert(location)
-    soil_recommendation = {"crop": "Wheat", "soil": "Loamy Soil", "fertilizer": "Urea (50kg/acre)"}
-    crop_health = session.get("last_crop_health", "Not Analyzed Yet")
-    last_query = Query.query.filter_by(username=username).order_by(Query.timestamp.desc()).first()
-    query_status = last_query.answer if last_query else "No queries yet"
-    return jsonify({
-        "username": username,
-        "location": location,
-        "weather_alert": weather_alert,
-        "weather_status_class": weather_status_class,
-        "weather_status_label": weather_status_label,
-        "soil_recommendation": soil_recommendation,
-        "crop_health": crop_health,
-        "query_status": query_status
-    })
+  <!-- Crop Health -->
+  <div class="card">
+    <h3>Crop Health</h3>
+    <p class="{{ 'status-good' if crop_health == 'Healthy' else 'status-alert' }}">{{ crop_health }}</p>
+  </div>
 
-# ---------------- Run App ----------------
-if __name__ == "__main__":
-    with app.app_context():
-        db.create_all()
-    app.run(debug=True, use_reloader=False)  # ⚠️ disable reloader or job runs twice
+  <!-- Recent Queries -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h3><b>Recent Queries</b></h3>
+    {% if query_list %}
+      <ul style="list-style:none; padding:0; margin:0;">
+        {% for q in query_list %}
+          <li style="margin-bottom:10px;">
+            <p style="font-size:13px; font-weight:600;">{{ q.question[:40] }}...</p>
+            <p style="font-size:12px; color:#555;">{{ q.answer }}</p>
+            <span style="font-size:12px; color: {{ 'green' if 'Answered' in q.status else 'orange' }};">
+              {{ q.status }}
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No queries yet</p>
+    {% endif %}
 
+    <!-- Ask New Query button -->
+    <div style="margin-top:15px; text-align:right;">
+      <a href="{{ url_for('query_form') }}" 
+         style="background:#00b894; color:white; padding:6px 12px; border-radius:6px; text-decoration:none; font-size:13px;">
+        Ask New Query →
+      </a>
+    </div>
+  </div>
+
+  <!--Recent Activity -->
+  <div class="card" style="grid-column: 1 / -1;">
+    <h3><b> Activity </b></h3>
+    {% if analytics %}
+      <ul style="list-style:none; padding:0; margin:0;">
+        {% for a in analytics %}
+          <li style="margin-bottom:8px; font-size:13px;">
+            <strong>Query:</strong> {{ a.question[:40] }}... 
+            <span style="color:#555;">({{ a.timestamp.strftime('%d %b %Y %I:%M %p') }})</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>No activity yet</p>
+    {% endif %}
+  </div>
+
+  <!-- Market Prices -->
+  <div class="card">
+    <h3><b>Market Prices</b></h3>
+    <ul style="list-style:none; padding:0; margin:0;">
+      {% for crop, price in crop_prices.items() %}
+        <li style="margin-bottom:6px; font-size:13px;">
+          <strong>{{ crop }}</strong>: {{ price }}
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <!-- Farming Tip -->
+  <div class="card">
+    <h3><B>Tip of the Day</B>></h3>
+    <p style="font-size:14px; color:#333;">{{ farming_tip }}</p>
+  </div>
+</div>
+
+
+  <!-- Scripts -->
+  <script>
+    // Update Date & Time
+    function updateDateTime() {
+      const now = new Date();
+      const options = { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' };
+      document.getElementById('datetime').innerText = 
+        now.toLocaleDateString('en-US', options) + " | " + now.toLocaleTimeString();
+    }
+    setInterval(updateDateTime, 1000);
+    updateDateTime();
+
+    // Toggle Notification Dropdown
+    document.getElementById("notif-bell").addEventListener("click", function() {
+      const box = document.getElementById("notif-box");
+      box.style.display = (box.style.display === "block") ? "none" : "block";
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener("click", function(e) {
+      const box = document.getElementById("notif-box");
+      const bell = document.getElementById("notif-bell");
+      if (!box.contains(e.target) && !bell.contains(e.target)) {
+        box.style.display = "none";
+      }
+    });
+  </script>
+
+</body>
+</html>
